@@ -1,12 +1,12 @@
 [Unit]
-Description=MSI P13 360 extended display (EVDI virtual monitor)
+Description=MSI P13 360 Display Mode (saved preference at login)
 Documentation=file://@ROOT@/README.md
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart=@P13CTL_BIN@ display desktop
+ExecStart=@P13CTL_BIN@ display mode
 WorkingDirectory=@ROOT@
 Restart=on-failure
 RestartSec=10

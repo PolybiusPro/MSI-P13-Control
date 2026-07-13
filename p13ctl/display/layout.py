@@ -53,8 +53,18 @@ def find_connected_virtual_output() -> str | None:
     return None
 
 def reset_saved_layout() -> None:
+    """Clear saved virtual-output placement; keep stream/panel/mode prefs."""
+    existing = load_display_config() or {}
+    keep: dict[str, Any] = {"version": CONFIG_VERSION}
+    for key in ("panel", "stream", "mode"):
+        if existing.get(key):
+            keep[key] = existing[key]
     try:
-        LAYOUT_PATH.unlink(missing_ok=True)
+        LAYOUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+        if keep.keys() - {"version"}:
+            LAYOUT_PATH.write_text(json.dumps(keep, indent=2) + "\n", encoding="utf-8")
+        else:
+            LAYOUT_PATH.unlink(missing_ok=True)
     except OSError as exc:
         raise DisplayError(f"could not remove saved config: {exc}") from exc
 
@@ -285,6 +295,8 @@ def load_display_config() -> dict[str, Any] | None:
         config["panel"] = dict(data["panel"])
     if isinstance(data.get("stream"), dict):
         config["stream"] = dict(data["stream"])
+    if isinstance(data.get("mode"), dict):
+        config["mode"] = dict(data["mode"])
     if len(config) == 1:
         return None
     return config
@@ -294,6 +306,7 @@ def save_display_config(
     *,
     panel: dict[str, Any] | None = None,
     stream: dict[str, Any] | None = None,
+    mode: dict[str, Any] | None = None,
 ) -> Path:
     """Save P13 settings, merging with any existing config on disk."""
     existing = load_display_config() or {}
@@ -319,6 +332,11 @@ def save_display_config(
         data["stream"] = stream
     elif existing.get("stream"):
         data["stream"] = existing["stream"]
+
+    if mode is not None:
+        data["mode"] = mode
+    elif existing.get("mode"):
+        data["mode"] = existing["mode"]
 
     LAYOUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     LAYOUT_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")

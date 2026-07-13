@@ -6,17 +6,17 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 
 ## What works today
 
-| Feature | Linux support | Notes |
-| --- | --- | --- |
-| Desktop on LCD @ 60fps | **Implemented** | EVDI virtual monitor (`p13ctl display desktop`) |
-| LCD custom image / test pattern | **Implemented** | JPEG streaming via Artinchip USB protocol |
-| System monitor on LCD | **Experimental** | Software-rendered HUD (`p13ctl sysmon`) |
-| Brightness / rotation (HID) | **Implemented** | `p13ctl hid brightness` / `p13ctl hid rotate` |
-| Display layout persistence | **Implemented** | Position, orientation, brightness saved to `~/.config/p13ctl/` |
-| Boot auto-start | **Implemented** | `p13-display.service` starts virtual monitor at login |
-| GUI control panel | **Implemented** | `p13ctl-gui` — display mode toggle and layout reset |
-| Pump / radiator fans | **Motherboard PWM** | Use BIOS/fancontrol — not USB-controlled on P13 |
-| ARGB lighting | **Motherboard ARGB** | Use OpenRGB / motherboard software — not USB-controlled |
+| Feature                         | Linux support        | Notes                                                          |
+| ------------------------------- | -------------------- | -------------------------------------------------------------- |
+| Desktop on LCD @ 60fps          | **Implemented**      | EVDI virtual monitor (`p13ctl display desktop`)                |
+| LCD custom image / test pattern | **Implemented**      | JPEG streaming via Artinchip USB protocol                      |
+| System monitor on LCD           | **Experimental**     | Software-rendered HUD (`p13ctl sysmon`)                        |
+| Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
+| Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/` |
+| Boot auto-start | **Implemented** | `p13-display.service` applies saved Display Mode at login |
+| GUI control panel               | **Implemented**      | `p13ctl-gui` — display mode toggle and layout reset            |
+| Pump / radiator fans            | **Motherboard PWM**  | Use BIOS/fancontrol — not USB-controlled on P13                |
+| ARGB lighting                   | **Motherboard ARGB** | Use OpenRGB / motherboard software — not USB-controlled        |
 
 ## Hardware summary
 
@@ -40,7 +40,7 @@ p13ctl display desktop
 p13ctl-gui
 ```
 
-`install.sh` installs system dependencies, EVDI (virtual monitor), udev rules, and `p13ctl` into a local virtualenv. It also enables `p13-display.service` so the panel mirrors your desktop at login, and installs a **MSI P13 Control** launcher for the GUI. No environment variables required.
+`install.sh` installs system dependencies, EVDI (virtual monitor), udev rules, and `p13ctl` into a local virtualenv. It also enables `p13-display.service` so your saved **Display Mode** starts at login, and installs a **MSI P13 Control** launcher for the GUI. No environment variables required.
 
 ```bash
 ./install.sh --no-boot-display   # skip login autostart

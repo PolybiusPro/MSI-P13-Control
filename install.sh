@@ -473,7 +473,7 @@ Try:
   p13ctl display desktop --capture
   p13ctl sysmon
 
-Boot: p13-display.service starts display desktop at login (disable with --no-boot-display).
+Boot: p13-display.service applies saved Display Mode at login (disable with --no-boot-display).
 
 Re-plug the P13 USB cable after udev rule install.
 

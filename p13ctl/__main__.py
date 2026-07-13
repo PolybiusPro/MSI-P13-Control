@@ -109,6 +109,16 @@ def cmd_display_desktop(args: argparse.Namespace) -> int:
         return 1
     return 0
 
+def cmd_display_mode(_args: argparse.Namespace) -> int:
+    """Apply the saved Display Mode (used at login)."""
+    from p13ctl.display.mode import run_saved_display_mode
+
+    try:
+        return run_saved_display_mode()
+    except KeyboardInterrupt:
+        print()
+        return 0
+
 def cmd_display_monitor(args: argparse.Namespace) -> int:
     """Alias for display desktop (virtual monitor)."""
     return cmd_display_desktop(args)
@@ -258,6 +268,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="capture mode: crop before scaling",
     )
     p_dd.set_defaults(func=cmd_display_desktop)
+    p_dmode = disp_sub.add_parser(
+        "mode",
+        help="Apply saved Display Mode from ~/.config/p13ctl (used at login)",
+    )
+    p_dmode.set_defaults(func=cmd_display_mode)
     p_dm = disp_sub.add_parser(
         "monitor",
         help="Alias for display desktop (EVDI virtual monitor)",

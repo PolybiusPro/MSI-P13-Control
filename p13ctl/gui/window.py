@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QStandardPaths, QThread
+from PySide6.QtCore import QStandardPaths, QThread, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -31,6 +31,15 @@ from p13ctl.display.layout import (
     resolve_stream_settings,
     save_display_config,
 )
+from p13ctl.display.mode import (
+    MODE_EXTENDED,
+    MODE_IMAGE,
+    MODE_OFF,
+    MODE_SYSMON,
+    MODE_TEST,
+    get_saved_mode,
+    update_saved_mode,
+)
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
 
 from .service import (
@@ -43,11 +52,6 @@ from .workers import MirrorWorker, SysmonWorker, TaskWorker
 
 _LOGGER = logging.getLogger(__name__)
 
-MODE_OFF = "off"
-MODE_EXTENDED = "extended"
-MODE_TEST = "test"
-MODE_IMAGE = "image"
-MODE_SYSMON = "sysmon"
 PANEL_SIZE = (480, 480)
 
 class MainWindow(QMainWindow):
@@ -66,9 +70,11 @@ class MainWindow(QMainWindow):
         self._active_mode: str | None = MODE_OFF
 
         self._build_ui()
+        self._load_saved_mode()
         self._refresh_status()
 
         self._poll_timer = self.startTimer(2000)
+        QTimer.singleShot(0, self._maybe_apply_saved_mode)
 
     def timerEvent(self, event) -> None:  # noqa: N802
         if event.timerId() == self._poll_timer and not self._closing:
@@ -231,12 +237,45 @@ class MainWindow(QMainWindow):
             return
         self._apply_mode(mode)
 
+    def _load_saved_mode(self) -> None:
+        saved = get_saved_mode()
+        self._image_path = saved.get("image")
+        self._set_combo_mode(saved["name"])
+
+    def _persist_mode(self, name: str, *, image: str | None = None) -> None:
+        try:
+            update_saved_mode(name=name, image=image)
+        except DisplayError as exc:
+            _LOGGER.warning("could not save display mode: %s", exc)
+
+    def _maybe_apply_saved_mode(self) -> None:
+        """Apply the saved mode if nothing is already driving the panel."""
+        if self._closing:
+            return
+        saved = get_saved_mode()["name"]
+        if self._mirror_running():
+            self._active_mode = MODE_EXTENDED
+            self._set_combo_mode(MODE_EXTENDED)
+            self._refresh_mode_status()
+            return
+        if self._worker_alive(self._sysmon_worker):
+            self._active_mode = MODE_SYSMON
+            self._set_combo_mode(MODE_SYSMON)
+            self._refresh_mode_status()
+            return
+        if saved == MODE_OFF or saved == self._active_mode:
+            self._active_mode = saved
+            self._refresh_mode_status()
+            return
+        self._apply_mode(saved)
+
     def _apply_mode(self, mode: str) -> None:
         previous = self._active_mode
         self._stop_current_mode(save_layout=previous == MODE_EXTENDED)
         if mode == MODE_OFF:
             self._blank_display()
             self._active_mode = MODE_OFF
+            self._persist_mode(MODE_OFF)
             self._status.showMessage("Display blanked", 3000)
             self._refresh_mode_status()
             return
@@ -246,16 +285,18 @@ class MainWindow(QMainWindow):
         elif mode == MODE_TEST:
             ok = self._start_test_pattern()
         elif mode == MODE_IMAGE:
-            ok = self._start_image_black()
+            ok = self._start_image_mode()
         elif mode == MODE_SYSMON:
             ok = self._start_sysmon()
         if not ok:
             self._blank_display()
             self._active_mode = MODE_OFF
+            self._persist_mode(MODE_OFF)
             self._set_combo_mode(MODE_OFF)
             self._refresh_mode_status()
             return
         self._active_mode = mode
+        self._persist_mode(mode, image=self._image_path if mode == MODE_IMAGE else None)
         self._refresh_mode_status()
 
     def _stop_current_mode(self, *, save_layout: bool) -> None:
@@ -283,6 +324,8 @@ class MainWindow(QMainWindow):
     def _start_extended(self) -> bool:
         if self._mirror_running():
             return True
+        # Persist before starting the login service so it runs the right mode.
+        self._persist_mode(MODE_EXTENDED)
         if not self._release_usb_for_static():
             return False
         if mirror_service_installed():
@@ -328,6 +371,7 @@ class MainWindow(QMainWindow):
 
     def _on_mirror_error(self, msg: str) -> None:
         self._active_mode = MODE_OFF
+        self._persist_mode(MODE_OFF)
         self._show_error("Extended display failed", msg)
         self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
@@ -410,10 +454,22 @@ class MainWindow(QMainWindow):
         self._run_task(_run, "Test pattern sent")
         return True
 
-    def _start_image_black(self) -> bool:
-        """Enter image mode with a solid black frame until a file is chosen."""
+    def _start_image_mode(self) -> bool:
+        """Enter image mode: restore saved image, or solid black until chosen."""
         if not self._release_usb_for_static():
             return False
+        stream = self._stream_values()
+        path = self._image_path
+        if path and Path(path).is_file():
+
+            def _run() -> None:
+                with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
+                    disp.show_static_file(path)
+
+            self._run_task(_run, f"Image sent: {path}")
+            self._status.showMessage(f"Image mode — {Path(path).name}", 4000)
+            return True
+
         self._image_path = None
         self._show_black()
         self._status.showMessage("Image mode — choose an image", 4000)
@@ -431,6 +487,7 @@ class MainWindow(QMainWindow):
             self._active_mode = MODE_IMAGE
         stream = self._stream_values()
         self._image_path = path
+        self._persist_mode(MODE_IMAGE, image=path)
 
         def _run() -> None:
             with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
@@ -452,6 +509,7 @@ class MainWindow(QMainWindow):
 
     def _on_sysmon_error(self, msg: str) -> None:
         self._active_mode = MODE_OFF
+        self._persist_mode(MODE_OFF)
         self._show_error("System monitor failed", msg)
         self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
