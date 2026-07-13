@@ -99,7 +99,7 @@ class ArtinchipDisplay:
         except usb.core.USBError as exc:
             if getattr(exc, "errno", None) == 16:
                 raise DisplayError(
-                    "Display USB interface is busy — stop the desktop mirror first"
+                    "Display USB interface is busy — stop the extended display first"
                 ) from exc
             raise DisplayError(f"USB claim failed: {exc}") from exc
         self._dev = dev

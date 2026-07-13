@@ -80,6 +80,6 @@ def wait_for_display_usb(timeout: float = 8.0) -> None:
             time.sleep(0.25)
     detail = str(last_error) if last_error else "timeout"
     raise DisplayError(
-        "Display USB interface is busy. Stop the desktop mirror and system monitor, "
+        "Display USB interface is busy. Stop the extended display and system monitor, "
         f"then try again ({detail})."
     )

@@ -1,5 +1,5 @@
 [Unit]
-Description=MSI P13 360 virtual monitor desktop mirror
+Description=MSI P13 360 extended display (EVDI virtual monitor)
 Documentation=file://@ROOT@/README.md
 After=graphical-session.target
 PartOf=graphical-session.target

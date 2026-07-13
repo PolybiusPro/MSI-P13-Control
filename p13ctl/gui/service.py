@@ -1,4 +1,4 @@
-"""systemd user service helpers for the desktop mirror."""
+"""systemd user service helpers for the extended display."""
 
 from __future__ import annotations
 

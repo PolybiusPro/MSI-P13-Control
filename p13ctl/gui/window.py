@@ -5,9 +5,8 @@ from __future__ import annotations
 import logging
 import subprocess
 
-from PySide6.QtCore import Qt, QStandardPaths, QThread
+from PySide6.QtCore import QStandardPaths, QThread
 from PySide6.QtWidgets import (
-    QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
@@ -16,8 +15,6 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
-    QSlider,
-    QSpinBox,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -28,13 +25,11 @@ from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
 from p13ctl.display.layout import (
     find_connected_virtual_output,
     load_display_config,
-    read_panel_state,
     reset_saved_layout,
+    resolve_stream_settings,
     save_display_config,
-    update_saved_panel,
 )
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
-from p13ctl.hid.msi_p13 import P13HidController
 
 from .service import (
     mirror_is_running,
@@ -46,8 +41,6 @@ from .workers import MirrorWorker, SysmonWorker, TaskWorker
 
 _LOGGER = logging.getLogger(__name__)
 
-ROTATIONS = (0, 90, 180, 270)
-
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
         super().__init__()
@@ -56,14 +49,11 @@ class MainWindow(QMainWindow):
 
         self._mirror_worker: MirrorWorker | None = None
         self._sysmon_worker: SysmonWorker | None = None
-        self._panel_worker: TaskWorker | None = None
         self._action_worker: TaskWorker | None = None
         self._workers: list[QThread] = []
-        self._updating_controls = False
         self._closing = False
 
         self._build_ui()
-        self._load_settings()
         self._refresh_status()
 
         self._poll_timer = self.startTimer(2000)
@@ -78,9 +68,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(root)
 
         layout.addWidget(self._device_group(root))
-        layout.addWidget(self._panel_group(root))
         layout.addWidget(self._mirror_group(root))
-        layout.addWidget(self._stream_group(root))
         layout.addWidget(self._actions_group(root))
         layout.addStretch()
 
@@ -102,32 +90,8 @@ class MainWindow(QMainWindow):
         form.addRow(refresh)
         return box
 
-    def _panel_group(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Panel", parent)
-        form = QFormLayout(box)
-
-        bright_wrap = QWidget(box)
-        bright_row = QHBoxLayout(bright_wrap)
-        bright_row.setContentsMargins(0, 0, 0, 0)
-        self._brightness = QSlider(Qt.Orientation.Horizontal, bright_wrap)
-        self._brightness.setRange(0, 100)
-        self._brightness.setValue(75)
-        self._brightness_label = QLabel("75%", bright_wrap)
-        self._brightness.valueChanged.connect(self._on_brightness_changed)
-        self._brightness.sliderReleased.connect(self._apply_brightness)
-        bright_row.addWidget(self._brightness)
-        bright_row.addWidget(self._brightness_label)
-        form.addRow("Brightness", bright_wrap)
-
-        self._rotation = QComboBox(box)
-        for degrees in ROTATIONS:
-            self._rotation.addItem(f"{degrees}°", degrees)
-        self._rotation.currentIndexChanged.connect(self._apply_rotation)
-        form.addRow("Rotation", self._rotation)
-        return box
-
     def _mirror_group(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Desktop mirror", parent)
+        box = QGroupBox("Extended display", parent)
         layout = QVBoxLayout(box)
 
         self._mirror_status = QLabel("Checking…", box)
@@ -136,8 +100,8 @@ class MainWindow(QMainWindow):
         btn_wrap = QWidget(box)
         row = QHBoxLayout(btn_wrap)
         row.setContentsMargins(0, 0, 0, 0)
-        self._mirror_start = QPushButton("Start mirror", btn_wrap)
-        self._mirror_stop = QPushButton("Stop mirror", btn_wrap)
+        self._mirror_start = QPushButton("Start", btn_wrap)
+        self._mirror_stop = QPushButton("Stop", btn_wrap)
         self._mirror_start.clicked.connect(self._start_mirror)
         self._mirror_stop.clicked.connect(self._stop_mirror)
         row.addWidget(self._mirror_start)
@@ -146,37 +110,13 @@ class MainWindow(QMainWindow):
         layout.addWidget(btn_wrap)
 
         hint = QLabel(
-            "Uses the EVDI virtual monitor. Adjust placement in System Settings; "
-            "settings are saved when the mirror stops.",
+            "Creates an EVDI virtual monitor as an extended display. "
+            "Adjust placement in System Settings; settings are saved when it stops.",
             box,
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: palette(mid);")
         layout.addWidget(hint)
-        return box
-
-    def _stream_group(self, parent: QWidget) -> QGroupBox:
-        box = QGroupBox("Stream", parent)
-        form = QFormLayout(box)
-
-        self._fps = QSpinBox(box)
-        self._fps.setRange(1, 60)
-        self._fps.setValue(60)
-        form.addRow("FPS", self._fps)
-
-        self._quality = QSpinBox(box)
-        self._quality.setRange(1, 95)
-        self._quality.setValue(75)
-        form.addRow("JPEG quality", self._quality)
-
-        self._stream_rotate = QComboBox(box)
-        for degrees in ROTATIONS:
-            self._stream_rotate.addItem(f"{degrees}°", degrees)
-        form.addRow("Software rotation", self._stream_rotate)
-
-        save = QPushButton("Save stream settings", box)
-        save.clicked.connect(self._save_stream_settings)
-        form.addRow(save)
         return box
 
     def _actions_group(self, parent: QWidget) -> QGroupBox:
@@ -202,9 +142,6 @@ class MainWindow(QMainWindow):
         row.addStretch()
         return box
 
-    def _on_brightness_changed(self, value: int) -> None:
-        self._brightness_label.setText(f"{value}%")
-
     def _worker_alive(self, worker: QThread | None) -> bool:
         if worker is None:
             return False
@@ -226,49 +163,13 @@ class MainWindow(QMainWindow):
         worker.finished.connect(_done)
         return worker
 
-    def _spawn_task(self, fn, *, on_ok=None, on_err=None) -> TaskWorker:
-        worker = TaskWorker(fn, parent=self)
-        if on_ok is not None:
-            worker.finished_ok.connect(on_ok)
-        if on_err is not None:
-            worker.finished_err.connect(on_err)
-        self._track_worker(worker)
-        worker.start()
-        return worker
-
-    def _load_settings(self) -> None:
-        config = load_display_config() or {}
-        stream = config.get("stream") or {}
-        panel = config.get("panel") or {}
-
-        self._fps.setValue(int(stream.get("fps", 60)))
-        self._quality.setValue(int(stream.get("quality", 75)))
-        self._set_combo_value(self._stream_rotate, int(stream.get("rotate", 0)))
-
-        if panel:
-            self._updating_controls = True
-            self._brightness.setValue(int(panel.get("brightness", 75)))
-            self._set_combo_value(self._rotation, int(panel.get("rotation", 0)))
-            self._updating_controls = False
-
-    def _set_combo_value(self, combo: QComboBox, value: int) -> None:
-        index = combo.findData(value)
-        if index >= 0:
-            combo.setCurrentIndex(index)
-
     def _stream_values(self) -> dict[str, int]:
-        return {
-            "fps": self._fps.value(),
-            "quality": self._quality.value(),
-            "rotate": int(self._stream_rotate.currentData()),
-        }
-
-    def _save_stream_settings(self) -> None:
-        try:
-            save_display_config(stream=self._stream_values())
-            self._status.showMessage("Stream settings saved", 3000)
-        except DisplayError as exc:
-            self._show_error("Could not save stream settings", str(exc))
+        return resolve_stream_settings(
+            load_display_config(),
+            fps=None,
+            quality=None,
+            rotate=None,
+        )
 
     def _refresh_status(self) -> None:
         if self._closing:
@@ -278,7 +179,6 @@ class MainWindow(QMainWindow):
             self._device_state.setText("Not connected")
             self._device_serial.setText("—")
             self._device_model.setText("—")
-            self._set_panel_enabled(False)
             self._refresh_mirror_state()
             return
 
@@ -286,91 +186,7 @@ class MainWindow(QMainWindow):
         self._device_state.setText("Connected")
         self._device_serial.setText(dev.serial or "—")
         self._device_model.setText(dev.product or "MSI MPG CoreLiquid P13")
-        self._set_panel_enabled(True)
-        self._read_panel_from_device()
         self._refresh_mirror_state()
-
-    def _set_panel_enabled(self, enabled: bool) -> None:
-        self._brightness.setEnabled(enabled)
-        self._rotation.setEnabled(enabled)
-
-    def _read_panel_from_device(self) -> None:
-        if self._worker_alive(self._panel_worker):
-            return
-        self._panel_worker = self._spawn_task(
-            read_panel_state,
-            on_ok=self._on_panel_read,
-            on_err=self._on_panel_read_err,
-        )
-
-    def _on_panel_read_err(self, msg: str) -> None:
-        _LOGGER.debug("panel read failed: %s", msg)
-
-    def _on_panel_read(self, panel: object) -> None:
-        if self._closing or not isinstance(panel, dict):
-            return
-        self._updating_controls = True
-        if "brightness" in panel:
-            self._brightness.setValue(int(panel["brightness"]))
-        if "rotation" in panel:
-            self._set_combo_value(self._rotation, int(panel["rotation"]))
-        self._updating_controls = False
-
-    def _apply_brightness(self) -> None:
-        if self._updating_controls or self._closing:
-            return
-        value = self._brightness.value()
-        self._spawn_task(
-            lambda: self._set_brightness(value),
-            on_ok=self._on_brightness_ok,
-            on_err=self._on_brightness_err,
-        )
-
-    def _on_brightness_ok(self, _result: object) -> None:
-        if not self._closing:
-            self._status.showMessage(
-                f"Brightness set to {self._brightness.value()}%", 3000
-            )
-
-    def _on_brightness_err(self, msg: str) -> None:
-        self._show_error("Brightness failed", msg)
-
-    @staticmethod
-    def _set_brightness(value: int) -> None:
-        with P13HidController() as hid:
-            hid.set_brightness(value)
-        try:
-            update_saved_panel(brightness=value)
-        except DisplayError:
-            pass
-
-    def _apply_rotation(self) -> None:
-        if self._updating_controls or self._closing:
-            return
-        degrees = int(self._rotation.currentData())
-        self._spawn_task(
-            lambda: self._set_rotation(degrees),
-            on_ok=self._on_rotation_ok,
-            on_err=self._on_rotation_err,
-        )
-
-    def _on_rotation_ok(self, _result: object) -> None:
-        if not self._closing:
-            self._status.showMessage(
-                f"Rotation set to {int(self._rotation.currentData())}°", 3000
-            )
-
-    def _on_rotation_err(self, msg: str) -> None:
-        self._show_error("Rotation failed", msg)
-
-    @staticmethod
-    def _set_rotation(degrees: int) -> None:
-        with P13HidController() as hid:
-            hid.set_rotate(degrees)
-        try:
-            update_saved_panel(rotation=degrees)
-        except DisplayError:
-            pass
 
     def _mirror_running(self) -> bool:
         if mirror_service_installed():
@@ -395,20 +211,14 @@ class MainWindow(QMainWindow):
         self._sysmon_btn.setText("Stop sysmon" if sysmon_running else "System monitor")
 
     def _start_mirror(self) -> None:
-        try:
-            save_display_config(stream=self._stream_values())
-        except DisplayError as exc:
-            self._show_error("Could not save stream settings", str(exc))
-            return
-
         if mirror_service_installed():
             try:
                 start_mirror_service()
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not start mirror service", detail)
+                self._show_error("Could not start extended display service", detail)
                 return
-            self._status.showMessage("Desktop mirror started", 3000)
+            self._status.showMessage("Extended display started", 3000)
             self._refresh_mirror_state()
             return
 
@@ -425,11 +235,11 @@ class MainWindow(QMainWindow):
         self._mirror_worker.error.connect(self._on_mirror_error)
         self._mirror_worker.stopped.connect(self._on_mirror_stopped)
         self._mirror_worker.start()
-        self._status.showMessage("Desktop mirror started", 3000)
+        self._status.showMessage("Extended display started", 3000)
         self._refresh_mirror_state()
 
     def _on_mirror_error(self, msg: str) -> None:
-        self._show_error("Desktop mirror failed", msg)
+        self._show_error("Extended display failed", msg)
 
     def _persist_layout_now(self) -> bool:
         """Save current virtual monitor placement while the output is still active."""
@@ -437,10 +247,7 @@ class MainWindow(QMainWindow):
         if output is None:
             return False
         try:
-            save_display_config(
-                virtual_output=output,
-                stream=self._stream_values(),
-            )
+            save_display_config(virtual_output=output)
             return True
         except DisplayError as exc:
             _LOGGER.warning("could not save layout: %s", exc)
@@ -454,9 +261,9 @@ class MainWindow(QMainWindow):
                 stop_mirror_service()
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not stop mirror service", detail)
+                self._show_error("Could not stop extended display service", detail)
                 return
-            self._status.showMessage("Desktop mirror stopped", 3000)
+            self._status.showMessage("Extended display stopped", 3000)
             self._refresh_mirror_state()
             return
 
@@ -467,7 +274,7 @@ class MainWindow(QMainWindow):
             self._mirror_worker.request_stop()
             self._mirror_worker.wait(8000)
             self._mirror_worker = None
-            self._status.showMessage("Desktop mirror stopped", 3000)
+            self._status.showMessage("Extended display stopped", 3000)
         self._refresh_mirror_state()
 
     def _on_mirror_stopped(self) -> None:
@@ -487,7 +294,7 @@ class MainWindow(QMainWindow):
         return files[0] if files else None
 
     def _stop_streaming_workers(self, *, wait_ms: int = 8000) -> None:
-        """Stop in-process mirror/sysmon and wait for USB release."""
+        """Stop in-process extended display / sysmon and wait for USB release."""
         stop_active_sessions()
         if self._worker_alive(self._sysmon_worker):
             assert self._sysmon_worker is not None
@@ -515,9 +322,9 @@ class MainWindow(QMainWindow):
         if self._mirror_running():
             reply = QMessageBox.question(
                 self,
-                "Stop desktop mirror?",
-                "The desktop mirror must stop before showing a static image.\n\n"
-                "Stop the mirror now?",
+                "Stop extended display?",
+                "The extended display must stop before showing a static image.\n\n"
+                "Stop it now?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -570,8 +377,8 @@ class MainWindow(QMainWindow):
         if self._mirror_running():
             reply = QMessageBox.question(
                 self,
-                "Stop desktop mirror?",
-                "System monitor needs exclusive USB access.\nStop the desktop mirror?",
+                "Stop extended display?",
+                "System monitor needs exclusive USB access.\nStop the extended display?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
             if reply != QMessageBox.StandardButton.Yes:
@@ -602,7 +409,7 @@ class MainWindow(QMainWindow):
         answer = QMessageBox.question(
             self,
             "Reset saved layout",
-            "Delete saved display settings and use defaults on next mirror start?",
+            "Delete saved display settings and use defaults on next extended display start?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
         )
         if answer != QMessageBox.StandardButton.Yes:
@@ -612,9 +419,8 @@ class MainWindow(QMainWindow):
         except DisplayError as exc:
             self._show_error("Reset failed", str(exc))
             return
-        self._load_settings()
         self._status.showMessage(
-            "Saved layout reset — stop and restart mirror, then stop again to save new placement",
+            "Saved layout reset — stop and restart extended display, then stop again to save new placement",
             5000,
         )
 
@@ -668,7 +474,6 @@ class MainWindow(QMainWindow):
         self._workers.clear()
         self._mirror_worker = None
         self._sysmon_worker = None
-        self._panel_worker = None
         self._action_worker = None
 
     def closeEvent(self, event) -> None:  # noqa: N802

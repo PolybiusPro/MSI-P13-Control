@@ -14,7 +14,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | Brightness / rotation (HID) | **Implemented** | `p13ctl hid brightness` / `p13ctl hid rotate` |
 | Display layout persistence | **Implemented** | Position, orientation, brightness saved to `~/.config/p13ctl/` |
 | Boot auto-start | **Implemented** | `p13-display.service` starts virtual monitor at login |
-| GUI control panel | **Implemented** | `p13ctl-gui` — brightness, mirror, stream settings |
+| GUI control panel | **Implemented** | `p13ctl-gui` — extended display and quick actions |
 | Pump / radiator fans | **Motherboard PWM** | Use BIOS/fancontrol — not USB-controlled on P13 |
 | ARGB lighting | **Motherboard ARGB** | Use OpenRGB / motherboard software — not USB-controlled |
 
