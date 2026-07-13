@@ -1,3 +1,3 @@
-from .msi_p13 import P13HidController, HidError
+from .msi_p13 import HidError, P13HidController, enable_host_display
 
-__all__ = ["P13HidController", "HidError"]
+__all__ = ["P13HidController", "HidError", "enable_host_display"]

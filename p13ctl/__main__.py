@@ -145,10 +145,31 @@ def cmd_hid_info(_args: argparse.Namespace) -> int:
         print(f"Serial:     {info.serial}")
         print(f"Brightness: {info.brightness}")
         print(f"Rotation:   {info.degree}")
+        print(f"Extended:   {info.extended_display}")
+        print(f"Realtime:   {info.realtime_display}")
+        print(f"BootFinish: {info.boot_finish}")
         if info.firmware_version:
             print(f"Firmware:   {info.firmware_version}")
         if info.hardware_version:
             print(f"Hardware:   {info.hardware_version}")
+        return 0
+    except HidError as exc:
+        print(f"HID error: {exc}", file=sys.stderr)
+        return 1
+
+def cmd_hid_host(args: argparse.Namespace) -> int:
+    try:
+        with P13HidController() as hid_dev:
+            if args.state == "on":
+                info = hid_dev.enable_host_display()
+                print(
+                    f"Host display enabled for {info.model or info.serial or 'P13'} "
+                    f"(extended={info.extended_display})."
+                )
+            else:
+                hid_dev.set_extended_display(False)
+                hid_dev.set_realtime_display(False)
+                print("Host display disabled (firmware may return to default image).")
         return 0
     except HidError as exc:
         print(f"HID error: {exc}", file=sys.stderr)
@@ -297,6 +318,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_hid = sub.add_parser("hid", help="HID control (brightness, rotation, info)")
     hid_sub = p_hid.add_subparsers(dest="hid_cmd", required=True)
     hid_sub.add_parser("info", help="Query device info (POST conn)").set_defaults(func=cmd_hid_info)
+    p_host = hid_sub.add_parser(
+        "host",
+        help="Enable/disable host display mode (leave firmware splash)",
+    )
+    p_host.add_argument("state", choices=["on", "off"])
+    p_host.set_defaults(func=cmd_hid_host)
     p_br = hid_sub.add_parser("brightness", help="Set LCD brightness (0-100)")
     p_br.add_argument("percent", type=int)
     p_br.set_defaults(func=cmd_hid_brightness)

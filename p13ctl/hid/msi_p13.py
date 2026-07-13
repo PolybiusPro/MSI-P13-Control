@@ -41,7 +41,15 @@ class DeviceInfo:
     app_version: str = ""
     firmware_version: str = ""
     hardware_version: str = ""
+    boot_finish: int = 0
+    realtime_display: int = 0
+    extended_display: int = 0
     raw: dict[str, Any] | None = None
+
+# SeqNumber values seen in captured traffic.
+SEQ_CONN = 100
+SEQ_EXTENDED_DISPLAY = 110
+SEQ_REALTIME_DISPLAY = 112
 
 def _build_post(command: str, body: str = "", seq: int = 100) -> str:
     headers = (
@@ -51,6 +59,9 @@ def _build_post(command: str, body: str = "", seq: int = 100) -> str:
     )
     if body:
         headers += f"ContentLength={len(body)}\r\n\r\n{body}"
+    else:
+        # The conn request ends without a blank body line when ContentLength is omitted.
+        pass
     return headers
 
 def _parse_post_response(text: str) -> tuple[dict[str, str], str]:
@@ -142,11 +153,7 @@ class P13HidController:
             return None
         return self._read_message()
 
-    def connect_session(self) -> DeviceInfo:
-        """POST conn — returns device metadata JSON from firmware."""
-        response = self._request(_build_post("conn 1"), read_response=True)
-        if not response:
-            raise HidError("empty conn response")
+    def _parse_json_body(self, response: str) -> dict[str, Any]:
         _headers, body = _parse_post_response(response)
         body = re.sub(r"[^\x20-\x7E]", "", body)
         cl_match = re.search(r"ContentLength=(\d+)", response.split("\r\n\r\n", 1)[0])
@@ -156,20 +163,105 @@ class P13HidController:
         try:
             data = json.loads(body)
         except json.JSONDecodeError as exc:
-            raise HidError(f"invalid conn JSON: {body!r}") from exc
+            raise HidError(f"invalid JSON body: {body!r}") from exc
+        if not isinstance(data, dict):
+            raise HidError(f"unexpected JSON payload: {body!r}")
+        return data
+
+    def _command_with_ack(self, command: str, body: str, seq: int, *, retries: int = 2) -> bool:
+        """Write a POST and wait for a SeqNumber+1 ack."""
+        msg = _build_post(command, body, seq=seq)
+        for attempt in range(retries):
+            try:
+                self._write_message(msg)
+                response = self._read_message(timeout_ms=2000)
+                if str(seq + 1) in response or "httpStatusCode" in response or "200" in response:
+                    return True
+                _LOGGER.debug("ack mismatch attempt %s: %r", attempt + 1, response[:120])
+            except HidError as exc:
+                _LOGGER.debug("command %s attempt %s failed: %s", command, attempt + 1, exc)
+                time.sleep(1.0)
+        # Fall back to fire-and-forget like brightness (some firmwares skip ack).
+        try:
+            self._write_message(msg)
+            self._write_message(msg)
+            return True
+        except HidError:
+            return False
+
+    def connect_session(self) -> DeviceInfo:
+        """POST conn — returns device metadata JSON from firmware.
+
+        The host writes conn twice before reading.
+        """
+        msg = _build_post("conn 1", seq=SEQ_CONN)
+        self._write_message(msg)
+        self._write_message(msg)
+        response = self._read_message(timeout_ms=2000)
+        if not response:
+            raise HidError("empty conn response")
+        data = self._parse_json_body(response)
         version = data.get("Version") or {}
+        if not isinstance(version, dict):
+            version = {}
         info = DeviceInfo(
-            manufacturer=data.get("Manufacturer", ""),
-            model=data.get("Model", ""),
-            serial=data.get("SN", ""),
-            brightness=int(data.get("Brightness", 0)),
-            degree=int(data.get("Degree", 0)),
-            app_version=version.get("App", ""),
-            firmware_version=version.get("Firmware", ""),
-            hardware_version=version.get("Hardware", ""),
+            manufacturer=str(data.get("Manufacturer", "")),
+            model=str(data.get("Model", "")),
+            serial=str(data.get("SN") or data.get("Sn") or ""),
+            brightness=int(data.get("Brightness", 0) or 0),
+            degree=int(data.get("Degree", 0) or 0),
+            app_version=str(version.get("App", "")),
+            firmware_version=str(version.get("Firmware", "")),
+            hardware_version=str(version.get("Hardware", "")),
+            boot_finish=int(data.get("BootFinish", 0) or 0),
+            realtime_display=int(data.get("RealtimeDisplay", 0) or 0),
+            extended_display=int(data.get("ExtendedDisplay", 0) or 0),
             raw=data,
         )
-        _LOGGER.info("connected to %s (%s)", info.model, info.serial)
+        _LOGGER.info(
+            "connected to %s (%s) ExtendedDisplay=%s RealtimeDisplay=%s",
+            info.model,
+            info.serial,
+            info.extended_display,
+            info.realtime_display,
+        )
+        return info
+
+    def set_extended_display(self, enable: bool = True, *, retries: int = 3) -> bool:
+        """Leave firmware splash / onboard animation and accept host framebuffer.
+
+        Matches the captured ``POST extendedDisplay`` (SeqNumber=110).
+        """
+        body = json.dumps({"enable": bool(enable)}, separators=(",", ":"))
+        for attempt in range(retries):
+            if self._command_with_ack("extendedDisplay 1", body, SEQ_EXTENDED_DISPLAY):
+                _LOGGER.info("extendedDisplay -> %s", enable)
+                return True
+            time.sleep(1.0)
+            _LOGGER.debug("extendedDisplay retry %s/%s", attempt + 1, retries)
+        raise HidError("failed to set extendedDisplay")
+
+    def set_realtime_display(self, enable: bool = True, *, retries: int = 2) -> bool:
+        """Enable firmware realtime host-content path (SeqNumber=112)."""
+        body = json.dumps({"enable": bool(enable)}, separators=(",", ":"))
+        for attempt in range(retries):
+            if self._command_with_ack("realtimeDisplay 1", body, SEQ_REALTIME_DISPLAY):
+                _LOGGER.info("realtimeDisplay -> %s", enable)
+                return True
+            time.sleep(0.5)
+        _LOGGER.warning("realtimeDisplay set failed (non-fatal)")
+        return False
+
+    def enable_host_display(self) -> DeviceInfo:
+        """Cold-boot handoff: conn + extendedDisplay(+realtime), matching the observed cold-boot sequence.
+
+        Without this, firmware keeps showing its default boot image even if JPEG
+        frames are later streamed over USB interface 0.
+        """
+        info = self.connect_session()
+        # Always assert: after cold boot, splash can remain until this POST succeeds.
+        self.set_extended_display(True)
+        self.set_realtime_display(True)
         return info
 
     def set_brightness(self, percent: int) -> None:
@@ -199,3 +291,8 @@ class P13HidController:
             except HidError:
                 continue
         return packets
+
+def enable_host_display() -> DeviceInfo:
+    """Module helper used by display paths before USB JPEG streaming."""
+    with P13HidController() as hid_dev:
+        return hid_dev.enable_host_display()

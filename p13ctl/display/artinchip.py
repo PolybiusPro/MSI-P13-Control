@@ -110,6 +110,16 @@ class ArtinchipDisplay:
         self.width, self.height, self.pixel_format, self.fps = self._get_params()
         if not self._authenticate():
             raise DisplayError("Artinchip RSA authentication failed")
+        # Firmware keeps the cold-boot splash until host display mode is enabled over HID.
+        try:
+            from p13ctl.hid.msi_p13 import HidError, enable_host_display
+
+            enable_host_display()
+        except HidError as exc:
+            _LOGGER.warning(
+                "could not enable host display mode (splash may remain): %s",
+                exc,
+            )
         self.frame_id = 0
         _LOGGER.info("Display connected: %dx%d @ %dfps", self.width, self.height, self.fps)
 
