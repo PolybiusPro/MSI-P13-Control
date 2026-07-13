@@ -135,12 +135,9 @@ class P13HidController:
         raw = self._dev.read(REPORT_SIZE, timeout_ms)
         if not raw:
             raise HidError("HID read timeout")
-        data = bytes(raw[1:]) if raw[0] == REPORT_ID else bytes(raw)
-        end = data.find(0)
-        if end != -1:
-            data = data[:end]
-        while data and data[-1] == 0:
-            data = data[:-1]
+        # Report ID at offset 0; remaining bytes may be zero-padded to 1024.
+        # Do not truncate at the first 0x00 — length high-byte is often zero.
+        data = bytes(raw[1:]) if raw and raw[0] == REPORT_ID else bytes(raw)
         try:
             payload = decode(data)
         except ProtocolError as exc:
