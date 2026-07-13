@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "p13ctl"
+version = "0.1.0"
+description = "Linux userspace driver for the MSI MPG CoreLiquid P13 360 AIO"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "MSI-P13 contributors" }]
+keywords = ["msi", "aio", "liquid-cooler", "p13", "artinchip", "hid"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Topic :: System :: Hardware",
+]
+dependencies = [
+    "cryptography>=41.0",
+    "hidapi>=0.14",
+    "Pillow>=10.0",
+    "pyusb>=1.2",
+]
+
+[project.optional-dependencies]
+sysmon = ["psutil>=5.9"]
+desktop = ["mss>=9.0"]
+
+[project.scripts]
+p13ctl = "p13ctl.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["p13ctl*"]

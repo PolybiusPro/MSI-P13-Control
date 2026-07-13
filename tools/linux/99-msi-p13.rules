@@ -1,0 +1,8 @@
+# MSI MPG CoreLiquid P13 360 — Artinchip USB display + HID control
+# Install: sudo cp 99-msi-p13.rules /etc/udev/rules.d/ && sudo udevadm control --reload
+
+# Artinchip composite device (display + HID)
+SUBSYSTEM=="usb", ATTR{idVendor}=="33c3", ATTR{idProduct}=="0e02", MODE="0660", GROUP="plugdev", TAG+="uaccess"
+
+# hidraw nodes for interface 1
+SUBSYSTEM=="hidraw", ATTRS{idVendor}=="33c3", ATTRS{idProduct}=="0e02", MODE="0660", GROUP="plugdev", TAG+="uaccess"
