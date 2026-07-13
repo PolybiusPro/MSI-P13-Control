@@ -172,6 +172,18 @@ def cmd_hid_rotate(args: argparse.Namespace) -> int:
         print(f"HID error: {exc}", file=sys.stderr)
         return 1
 
+def cmd_gui(_args: argparse.Namespace) -> int:
+    try:
+        from p13ctl.gui.main import main as gui_main
+    except ImportError as exc:
+        print(
+            "GUI requires PySide6: pip install -e '.[gui]'",
+            file=sys.stderr,
+        )
+        print(f"Import error: {exc}", file=sys.stderr)
+        return 1
+    return gui_main()
+
 def cmd_hid_sniff(args: argparse.Namespace) -> int:
     try:
         with P13HidController() as hid_dev:
@@ -279,6 +291,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_sn = hid_sub.add_parser("sniff", help="Read HID traffic")
     p_sn.add_argument("--duration", type=float, default=5.0)
     p_sn.set_defaults(func=cmd_hid_sniff)
+
+    p_gui = sub.add_parser("gui", help="Open the graphical control panel")
+    p_gui.set_defaults(func=cmd_gui)
 
     return parser
 

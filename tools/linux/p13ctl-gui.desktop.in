@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=MSI P13 Control
+GenericName=Liquid Cooler Display
+Comment=Control the MSI MPG CoreLiquid P13 360 AIO panel on Linux
+Exec=@P13CTL_GUI_BIN@
+Icon=computer
+Terminal=false
+Categories=Utility;HardwareSettings;
+StartupNotify=true
+Keywords=msi;p13;aio;liquid;cooler;display;

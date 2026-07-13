@@ -14,6 +14,7 @@ keywords = ["msi", "aio", "liquid-cooler", "p13", "artinchip", "hid"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
+    "Environment :: X11 Applications :: Qt",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: GNU General Public License v3 or later (GPLv3+)",
     "Operating System :: POSIX :: Linux",
@@ -30,9 +31,11 @@ dependencies = [
 [project.optional-dependencies]
 sysmon = ["psutil>=5.9"]
 desktop = ["mss>=9.0"]
+gui = ["PySide6>=6.5"]
 
 [project.scripts]
 p13ctl = "p13ctl.__main__:main"
+p13ctl-gui = "p13ctl.gui.main:main"
 
 [tool.setuptools.packages.find]
 where = ["."]

@@ -14,6 +14,7 @@ DO_BLACKLIST=0
 WITH_SYSMON=1
 WITH_DESKTOP=1
 DO_BOOT_DISPLAY=1
+WITH_GUI=1
 
 DISPLAYLINK_TAG="v6.3.0-1"
 DISPLAYLINK_VER="1.15.0-1.github_evdi"
@@ -34,6 +35,7 @@ Options:
   --no-python       Skip virtualenv and pip install
   --no-desktop      Skip desktop capture dependencies
   --no-boot-display Do not start p13ctl display desktop at login
+  --no-gui            Skip GUI (PySide6) and desktop launcher
   --blacklist-aic   Blacklist aic_usb_display kernel driver
   -h, --help        Show this help
 
@@ -59,6 +61,7 @@ while [[ $# -gt 0 ]]; do
     --no-python) DO_PYTHON=0; shift ;;
     --no-desktop) WITH_DESKTOP=0; DO_BOOT_DISPLAY=0; shift ;;
     --no-boot-display) DO_BOOT_DISPLAY=0; shift ;;
+    --no-gui) WITH_GUI=0; shift ;;
     --blacklist-aic) DO_BLACKLIST=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
@@ -362,6 +365,23 @@ install_boot_display() {
   fi
 }
 
+install_gui_desktop() {
+  echo "==> Installing GUI launcher"
+  local apps_dir="${XDG_DATA_HOME:-$HOME/.local/share}/applications"
+  local gui_bin="$VENV/bin/p13ctl-gui"
+  if [[ ! -x "$gui_bin" ]]; then
+    echo "    warning: $gui_bin not found — skipping GUI launcher"
+    return 0
+  fi
+  mkdir -p "$apps_dir"
+  sed -e "s|@P13CTL_GUI_BIN@|$gui_bin|g" \
+    "$LINUX/p13ctl-gui.desktop.in" > "$apps_dir/p13ctl-gui.desktop"
+  if command -v update-desktop-database >/dev/null 2>&1; then
+    update-desktop-database "$apps_dir" 2>/dev/null || true
+  fi
+  echo "    Added $apps_dir/p13ctl-gui.desktop"
+}
+
 blacklist_aic_driver() {
   local conf="/etc/modprobe.d/blacklist-aic-usb-display.conf"
   echo "==> Blacklisting Artinchip kernel driver"
@@ -384,6 +404,7 @@ install_python() {
   local extras_parts=()
   [[ "$WITH_SYSMON" == "1" ]] && extras_parts+=("sysmon")
   [[ "$WITH_DESKTOP" == "1" ]] && extras_parts+=("desktop")
+  [[ "$WITH_GUI" == "1" ]] && extras_parts+=("gui")
   local extras=""
   if ((${#extras_parts[@]} > 0)); then
     extras="[$(IFS=,; echo "${extras_parts[*]}")]"
@@ -408,6 +429,10 @@ fi
 
 if [[ "$DO_PYTHON" == "1" && "$DO_BOOT_DISPLAY" == "1" && "$WITH_DESKTOP" == "1" ]]; then
   install_boot_display
+fi
+
+if [[ "$DO_PYTHON" == "1" && "$WITH_GUI" == "1" ]]; then
+  install_gui_desktop
 fi
 
 if [[ "$DO_UDEV" == "1" ]]; then
@@ -444,6 +469,7 @@ Try:
   p13ctl hid info
   p13ctl display test
   p13ctl display desktop
+  p13ctl-gui                      # graphical control panel
   p13ctl display desktop --capture
   p13ctl sysmon
 

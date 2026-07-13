@@ -42,6 +42,16 @@ def is_evdi_output(name: str) -> bool:
 def is_physical_output(name: str) -> bool:
     return any(prefix in name for prefix in _PHYSICAL_PREFIXES)
 
+def find_connected_virtual_output() -> str | None:
+    """Return the connected EVDI virtual output name from the current desktop layout."""
+    try:
+        for item in _fetch_kscreen_outputs():
+            if is_evdi_output(item["name"]):
+                return item["name"]
+    except DisplayError:
+        return None
+    return None
+
 def reset_saved_layout() -> None:
     try:
         LAYOUT_PATH.unlink(missing_ok=True)
@@ -290,8 +300,13 @@ def save_display_config(
     data: dict[str, Any] = {"version": CONFIG_VERSION}
 
     if virtual_output is not None:
-        captured = capture_virtual_output(virtual_output)
-        data["virtual"] = captured["virtual"]
+        try:
+            captured = capture_virtual_output(virtual_output)
+            data["virtual"] = captured["virtual"]
+        except DisplayError as exc:
+            _LOGGER.warning("could not capture virtual layout: %s", exc)
+            if existing.get("virtual"):
+                data["virtual"] = existing["virtual"]
     elif existing.get("virtual"):
         data["virtual"] = existing["virtual"]
 

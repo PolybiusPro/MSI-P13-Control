@@ -74,6 +74,10 @@ class ArtinchipDisplay:
         self.fps = 0
         self.frame_id = 0
         self.rotate = rotate % 360
+        self._stop_requested = False
+
+    def request_stop(self) -> None:
+        self._stop_requested = True
 
     @staticmethod
     def find():
@@ -90,8 +94,19 @@ class ArtinchipDisplay:
         except usb.core.USBError as exc:
             _LOGGER.debug("kernel driver detach: %s", exc)
 
-        usb.util.claim_interface(dev, DISPLAY_INTERFACE)
+        try:
+            usb.util.claim_interface(dev, DISPLAY_INTERFACE)
+        except usb.core.USBError as exc:
+            if getattr(exc, "errno", None) == 16:
+                raise DisplayError(
+                    "Display USB interface is busy — stop the desktop mirror first"
+                ) from exc
+            raise DisplayError(f"USB claim failed: {exc}") from exc
         self._dev = dev
+        self._stop_requested = False
+        from .session import register_display
+
+        register_display(self)
         self.width, self.height, self.pixel_format, self.fps = self._get_params()
         if not self._authenticate():
             raise DisplayError("Artinchip RSA authentication failed")
@@ -99,11 +114,14 @@ class ArtinchipDisplay:
         _LOGGER.info("Display connected: %dx%d @ %dfps", self.width, self.height, self.fps)
 
     def close(self) -> None:
+        from .session import unregister_display
+
         if self._dev is not None:
             try:
                 usb.util.release_interface(self._dev, DISPLAY_INTERFACE)
             except usb.core.USBError:
                 pass
+            unregister_display(self)
             self._dev = None
 
     def __enter__(self):
@@ -212,7 +230,7 @@ class ArtinchipDisplay:
         if target_interval is None:
             target_interval = 1.0 / 15
 
-        while True:
+        while not self._stop_requested:
             t0 = time.monotonic()
             image = grab_desktop(monitor=monitor, crop=crop_mode)
             self.send_image(image, quality=quality)
@@ -230,7 +248,7 @@ class ArtinchipDisplay:
         from PIL import ImageDraw, ImageFont
 
         w, h = self.width or 480, self.height or 480
-        while True:
+        while not self._stop_requested:
             img = Image.new("RGB", (w, h), (12, 14, 20))
             draw = ImageDraw.Draw(img)
             temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}

@@ -13,6 +13,7 @@ DO_CONFIG=0
 DO_BLACKLIST=0
 DO_PACKAGES=0
 DO_BOOT_DISPLAY=1
+DO_GUI=1
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -32,6 +33,7 @@ Options:
   --keep-udev         Leave udev rules in place
   --keep-python       Leave .venv in place
   --keep-boot-display Leave p13-display.service user unit in place
+  --keep-gui            Leave GUI desktop launcher in place
   -h, --help          Show this help
 
 Examples:
@@ -50,6 +52,7 @@ while [[ $# -gt 0 ]]; do
     --keep-udev) DO_UDEV=0; shift ;;
     --keep-python) DO_PYTHON=0; shift ;;
     --keep-boot-display) DO_BOOT_DISPLAY=0; shift ;;
+    --keep-gui) DO_GUI=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
@@ -172,6 +175,18 @@ remove_boot_display() {
   systemctl --user daemon-reload 2>/dev/null || true
 }
 
+remove_gui_desktop() {
+  local desktop="${XDG_DATA_HOME:-$HOME/.local/share}/applications/p13ctl-gui.desktop"
+  if [[ -f "$desktop" ]]; then
+    echo "==> Removing GUI launcher"
+    rm -f "$desktop"
+    echo "    removed $desktop"
+    if command -v update-desktop-database >/dev/null 2>&1; then
+      update-desktop-database "$(dirname "$desktop")" 2>/dev/null || true
+    fi
+  fi
+}
+
 # --- uninstall ---
 
 if [[ "$DO_EVDI" == "1" ]]; then
@@ -201,6 +216,10 @@ if [[ "$DO_BOOT_DISPLAY" == "1" ]]; then
   remove_boot_display
 fi
 
+if [[ "$DO_GUI" == "1" ]]; then
+  remove_gui_desktop
+fi
+
 if [[ "$DO_CONFIG" == "1" ]]; then
   remove_config
 fi
@@ -217,6 +236,7 @@ $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )
 $( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service (boot display)" )
+$( [[ "$DO_GUI" == "1" ]] && echo "  - p13ctl-gui desktop launcher" )
 
 System packages (python3, libusb, dkms, etc.) were left installed.
 Reboot if EVDI was loaded and you removed the module.

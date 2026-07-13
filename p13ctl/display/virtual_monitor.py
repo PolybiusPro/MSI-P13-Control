@@ -8,6 +8,7 @@ import re
 import shutil
 import signal
 import subprocess
+import threading
 import time
 
 from .artinchip import DisplayError
@@ -16,12 +17,14 @@ from .layout import (
     LAYOUT_PATH,
     apply_layout,
     apply_panel_config,
+    find_connected_virtual_output,
     load_display_config,
     load_layout,
     read_panel_state,
     reset_saved_layout,
     save_display_config,
 )
+from .session import register_bridge, stop_active_sessions, unregister_bridge
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -90,10 +93,13 @@ def _xrandr_outputs() -> list[tuple[str, bool, str]]:
     return outputs
 
 def find_evdi_output() -> str | None:
-    """Return the xrandr name of the EVDI virtual output, if present."""
-    for name, _primary, _line in _xrandr_outputs():
-        if not any(prefix in name for prefix in _PHYSICAL_PREFIXES):
-            return name
+    """Return the EVDI virtual output name, if present."""
+    name = find_connected_virtual_output()
+    if name is not None:
+        return name
+    for out_name, _primary, _line in _xrandr_outputs():
+        if not any(prefix in out_name for prefix in _PHYSICAL_PREFIXES):
+            return out_name
     return None
 
 def _primary_output() -> tuple[str | None, int]:
@@ -234,10 +240,12 @@ def run_virtual_monitor(
 
     def _request_stop(signum: int, _frame) -> None:
         _LOGGER.info("received signal %s, stopping", signum)
-        bridge.shutdown()
+        # Stop the stream loop only — save layout in finally before EVDI disconnect.
+        bridge.running = False
 
-    signal.signal(signal.SIGTERM, _request_stop)
-    signal.signal(signal.SIGINT, _request_stop)
+    if threading.current_thread() is threading.main_thread():
+        signal.signal(signal.SIGTERM, _request_stop)
+        signal.signal(signal.SIGINT, _request_stop)
 
     try:
         bridge.setup_evdi()
@@ -261,6 +269,7 @@ def run_virtual_monitor(
             print(msg)
         else:
             print("EVDI virtual monitor active (Ctrl+C to stop).")
+        register_bridge(bridge)
         bridge.run()
     finally:
         if save_layout and output_name:
@@ -280,4 +289,5 @@ def run_virtual_monitor(
                 print(f"Saved P13 settings to {LAYOUT_PATH}")
             except DisplayError as exc:
                 _LOGGER.warning("could not save display config: %s", exc)
+        unregister_bridge(bridge)
         bridge.shutdown()
