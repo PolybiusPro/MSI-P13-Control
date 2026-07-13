@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import shutil
+import signal
 import subprocess
 import time
 
@@ -230,6 +231,14 @@ def run_virtual_monitor(
         rotate=rotate,
         on_mode_changed_hook=_reapply_saved_layout,
     )
+
+    def _request_stop(signum: int, _frame) -> None:
+        _LOGGER.info("received signal %s, stopping", signum)
+        bridge.shutdown()
+
+    signal.signal(signal.SIGTERM, _request_stop)
+    signal.signal(signal.SIGINT, _request_stop)
+
     try:
         bridge.setup_evdi()
         if configure:

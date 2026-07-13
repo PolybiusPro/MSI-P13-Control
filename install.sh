@@ -13,6 +13,7 @@ DO_PYTHON=1
 DO_BLACKLIST=0
 WITH_SYSMON=1
 WITH_DESKTOP=1
+DO_BOOT_DISPLAY=1
 
 DISPLAYLINK_TAG="v6.3.0-1"
 DISPLAYLINK_VER="1.15.0-1.github_evdi"
@@ -32,6 +33,7 @@ Options:
   --no-udev         Skip udev rules
   --no-python       Skip virtualenv and pip install
   --no-desktop      Skip desktop capture dependencies
+  --no-boot-display Do not start p13ctl display desktop at login
   --blacklist-aic   Blacklist aic_usb_display kernel driver
   -h, --help        Show this help
 
@@ -55,7 +57,8 @@ while [[ $# -gt 0 ]]; do
     --no-system-deps) DO_SYSTEM_DEPS=0; shift ;;
     --no-udev) DO_UDEV=0; shift ;;
     --no-python) DO_PYTHON=0; shift ;;
-    --no-desktop) WITH_DESKTOP=0; shift ;;
+    --no-desktop) WITH_DESKTOP=0; DO_BOOT_DISPLAY=0; shift ;;
+    --no-boot-display) DO_BOOT_DISPLAY=0; shift ;;
     --blacklist-aic) DO_BLACKLIST=1; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
@@ -116,17 +119,131 @@ install_system_deps() {
   fi
 }
 
-install_evdi_configs() {
-  echo "==> Installing EVDI boot/modprobe config"
-  run_root cp "$LINUX/evdi.conf" /etc/modprobe.d/evdi-p13.conf
+install_evdi_src_dir() {
+  ls -d /usr/src/evdi-* 2>/dev/null | head -1
+}
+
+evdi_source_version() {
+  local src base
+  src="$(install_evdi_src_dir)" || return 1
+  base="$(basename "$src")"
+  [[ "$base" == evdi-* ]] || return 1
+  echo "${base#evdi-}"
+}
+
+evdi_module_built() {
+  local kver="${1:-$(uname -r)}"
+  [[ -n "$(find "/lib/modules/$kver" -name 'evdi.ko*' -print -quit 2>/dev/null)" ]]
+}
+
+evdi_dkms_status_for_kernel() {
+  local version="${1:?}" kver="${2:?}"
+  dkms status "evdi/$version" 2>/dev/null | grep -F "$kver" | grep -q ': installed'
+}
+
+evdi_installed_for_kernel() {
+  local version="${1:?}"
+  local kver="${2:-$(uname -r)}"
+  evdi_dkms_status_for_kernel "$version" "$kver" && evdi_module_built "$kver"
+}
+
+# Like xone: register source with DKMS and build for the running kernel.
+# evdi dkms.conf sets AUTOINSTALL=yes so dkms.service rebuilds on kernel updates.
+ensure_evdi_dkms() {
+  local src version kver
+  src="$(install_evdi_src_dir)" || return 1
+  version="$(evdi_source_version)" || return 1
+  kver="$(uname -r)"
+
+  if evdi_installed_for_kernel "$version" "$kver"; then
+    return 0
+  fi
+
+  echo "==> Building EVDI $version for kernel $kver (dkms install)"
+  if run_root dkms install "$src" -k "$kver" && evdi_module_built "$kver"; then
+    return 0
+  fi
+  if run_root dkms install "$src" && evdi_module_built "$kver"; then
+    return 0
+  fi
+  if run_root dkms autoinstall -m evdi && evdi_module_built "$kver"; then
+    return 0
+  fi
+  return 1
+}
+
+evdi_is_loaded() {
+  lsmod | awk '$1=="evdi"{found=1} END{exit !found}'
+}
+
+write_evdi_modprobe_conf() {
+  local conf="$LINUX/evdi.conf" tmp
+  tmp="$(mktemp)"
+  cp "$conf" "$tmp"
+  run_root cp "$tmp" /etc/modprobe.d/evdi-p13.conf
+  rm -f "$tmp"
+}
+
+prepare_evdi_modprobe() {
+  remove_conflicting_evdi_configs
+  write_evdi_modprobe_conf
+  run_root depmod -a "$(uname -r)" 2>/dev/null || true
+}
+
+disable_displaylink_service() {
+  if systemctl list-unit-files displaylink-driver.service &>/dev/null; then
+    run_root systemctl stop displaylink-driver.service 2>/dev/null || true
+    run_root systemctl disable displaylink-driver.service 2>/dev/null || true
+    echo "    Disabled displaylink-driver.service (only EVDI is needed)"
+  fi
+}
+
+install_evdi_boot_config() {
+  echo "==> Configuring EVDI boot load"
   run_root cp "$LINUX/evdi-modules-load.conf" /etc/modules-load.d/evdi-p13.conf
-  if systemctl list-unit-files dkms-autoinstall.service &>/dev/null; then
-    echo "==> Enabling DKMS autoinstall on boot"
-    run_root systemctl enable dkms-autoinstall.service 2>/dev/null || true
+  run_root cp "$LINUX/evdi-p13.service" /etc/systemd/system/evdi-p13.service
+  run_root systemctl daemon-reload
+  run_root systemctl enable dkms.service 2>/dev/null || true
+  run_root systemctl enable evdi-p13.service
+}
+
+remove_conflicting_evdi_configs() {
+  run_root rm -f /etc/modprobe.d/evdi.conf /etc/modules-load.d/evdi.conf
+}
+
+load_evdi_module() {
+  local kver modprobe_cmd ko
+  kver="$(uname -r)"
+  modprobe_cmd="$(command -v modprobe || echo /usr/sbin/modprobe)"
+
+  if evdi_is_loaded; then
+    return 0
   fi
-  if systemctl list-unit-files dkms.service &>/dev/null; then
-    run_root systemctl enable dkms.service 2>/dev/null || true
+  if ! evdi_module_built "$kver"; then
+    echo "    evdi.ko missing for kernel $kver" >&2
+    return 1
   fi
+
+  if ! run_root "$modprobe_cmd" evdi initial_device_count=1; then
+    echo "    modprobe failed, trying insmod" >&2
+    ko="$(find "/lib/modules/$kver" -name 'evdi.ko*' -print -quit)"
+    if [[ -z "$ko" ]]; then
+      return 1
+    fi
+    run_root "$modprobe_cmd" drm_ttm_helper 2>/dev/null || true
+    if ! run_root insmod "$ko" initial_device_count=1; then
+      echo "    insmod failed" >&2
+      return 1
+    fi
+  fi
+
+  if evdi_is_loaded; then
+    return 0
+  fi
+
+  echo "    evdi not loaded; recent kernel messages:" >&2
+  run_root dmesg 2>/dev/null | tail -10 >&2 || true
+  return 1
 }
 
 install_evdi_fedora_rpm() {
@@ -142,17 +259,6 @@ install_evdi_fedora_rpm() {
   echo "    $rpm_url"
   curl -fsSL -o "$rpm_path" "$rpm_url"
   run_root dnf install -y "$rpm_path"
-
-  echo "==> Building EVDI kernel module (DKMS)"
-  run_root dkms autoinstall -m evdi || {
-    evdi_ver="$(ls /usr/src 2>/dev/null | grep '^evdi-' | head -1 | sed 's/^evdi-//')"
-    [[ -n "$evdi_ver" ]] && run_root dkms install "evdi/$evdi_ver" || true
-  }
-
-  if systemctl list-unit-files displaylink-driver.service &>/dev/null; then
-    run_root systemctl disable --now displaylink-driver.service 2>/dev/null || true
-    echo "    Disabled displaylink-driver.service (only EVDI is needed)"
-  fi
 }
 
 install_evdi_packages() {
@@ -177,19 +283,23 @@ link_libevdi() {
 }
 
 evdi_secure_boot_pending() {
-  mokutil --sb-state 2>/dev/null | grep -qi enabled \
-    && ! dkms status 2>/dev/null | grep -E '^evdi,' | grep -q installed
+  if ! mokutil --sb-state 2>/dev/null | grep -qi enabled; then
+    return 1
+  fi
+  local version
+  version="$(evdi_source_version)" || return 1
+  ! evdi_installed_for_kernel "$version"
 }
 
 install_evdi() {
   echo "==> Installing EVDI (virtual monitor for display desktop)"
-  install_evdi_configs
   install_evdi_packages
 
-  if evdi_secure_boot_pending; then
-    cat <<'SB'
+  if ! ensure_evdi_dkms; then
+    if evdi_secure_boot_pending; then
+      cat <<'SB'
 
-==> Secure Boot is enabled and EVDI is not built yet.
+==> Secure Boot is enabled and EVDI could not be built for this kernel.
 
 Enroll the DKMS signing key, then reboot:
 
@@ -197,21 +307,28 @@ Enroll the DKMS signing key, then reboot:
 
 In the blue MOK Manager screen: Enroll MOK → Continue → Yes → enter password → Reboot.
 
-After reboot, DKMS builds evdi and it loads automatically via /etc/modules-load.d/evdi-p13.conf
+After reboot, dkms.service builds evdi and evdi-p13.service loads it.
 
 SB
-    return 0
+      install_evdi_boot_config
+      return 0
+    fi
+    die "DKMS build for evdi failed — check: dkms status; journalctl -u dkms -b"
   fi
 
   echo "==> Loading EVDI module"
-  if run_root modprobe evdi initial_device_count=1; then
+  prepare_evdi_modprobe
+  if load_evdi_module; then
     echo "    EVDI loaded ($(lsmod | awk '/^evdi /{print $1, $3}'))"
   else
-    die "modprobe evdi failed — check: dkms status; journalctl -k | tail"
+    die "modprobe evdi failed — try: sudo modprobe evdi initial_device_count=1"
   fi
 
+  disable_displaylink_service
+  install_evdi_boot_config
+
   link_libevdi
-  echo "    EVDI loads automatically on boot"
+  echo "    EVDI rebuilds via dkms.service (AUTOINSTALL), loads via evdi-p13.service"
 }
 
 install_udev() {
@@ -220,6 +337,29 @@ install_udev() {
   run_root udevadm control --reload-rules
   run_root udevadm trigger
   echo "    Added /etc/udev/rules.d/99-msi-p13.rules"
+}
+
+install_boot_display() {
+  echo "==> Enabling P13 display at login"
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local p13ctl_bin="$VENV/bin/p13ctl"
+  if [[ ! -x "$p13ctl_bin" ]]; then
+    echo "    warning: $p13ctl_bin not found — skipping boot display service"
+    return 0
+  fi
+  mkdir -p "$unit_dir"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@P13CTL_BIN@|$p13ctl_bin|g" \
+    "$LINUX/p13-display.service.in" > "$unit_dir/p13-display.service"
+  if systemctl --user daemon-reload 2>/dev/null; then
+    systemctl --user enable p13-display.service
+    echo "    Enabled p13-display.service (starts at graphical login)"
+    if systemctl --user is-active --quiet graphical-session.target 2>/dev/null; then
+      systemctl --user start p13-display.service 2>/dev/null || true
+    fi
+  else
+    echo "    Wrote $unit_dir/p13-display.service"
+    echo "    Run after login: systemctl --user daemon-reload && systemctl --user enable --now p13-display.service"
+  fi
 }
 
 blacklist_aic_driver() {
@@ -266,6 +406,10 @@ if [[ "$DO_PYTHON" == "1" ]]; then
   install_python
 fi
 
+if [[ "$DO_PYTHON" == "1" && "$DO_BOOT_DISPLAY" == "1" && "$WITH_DESKTOP" == "1" ]]; then
+  install_boot_display
+fi
+
 if [[ "$DO_UDEV" == "1" ]]; then
   install_udev
 fi
@@ -302,6 +446,8 @@ Try:
   p13ctl display desktop
   p13ctl display desktop --capture
   p13ctl sysmon
+
+Boot: p13-display.service starts display desktop at login (disable with --no-boot-display).
 
 Re-plug the P13 USB cable after udev rule install.
 

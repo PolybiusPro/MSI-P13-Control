@@ -1,0 +1,16 @@
+[Unit]
+Description=MSI P13 360 virtual monitor desktop mirror
+Documentation=file://@ROOT@/README.md
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@P13CTL_BIN@ display desktop
+WorkingDirectory=@ROOT@
+Restart=on-failure
+RestartSec=10
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=graphical-session.target

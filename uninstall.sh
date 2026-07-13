@@ -12,6 +12,7 @@ DO_EVDI=1
 DO_CONFIG=0
 DO_BLACKLIST=0
 DO_PACKAGES=0
+DO_BOOT_DISPLAY=1
 
 die() { echo "error: $*" >&2; exit 1; }
 
@@ -30,6 +31,7 @@ Options:
   --keep-evdi         Leave EVDI kernel module and boot config in place
   --keep-udev         Leave udev rules in place
   --keep-python       Leave .venv in place
+  --keep-boot-display Leave p13-display.service user unit in place
   -h, --help          Show this help
 
 Examples:
@@ -47,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --keep-evdi) DO_EVDI=0; shift ;;
     --keep-udev) DO_UDEV=0; shift ;;
     --keep-python) DO_PYTHON=0; shift ;;
+    --keep-boot-display) DO_BOOT_DISPLAY=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
   esac
@@ -96,8 +99,15 @@ remove_evdi_dkms() {
 
 remove_evdi_configs() {
   echo "==> Removing EVDI boot/modprobe config"
+  if systemctl is-enabled evdi-p13.service &>/dev/null; then
+    run_root systemctl disable evdi-p13.service 2>/dev/null || true
+  fi
+  run_root systemctl stop evdi-p13.service 2>/dev/null || true
+  remove_file /etc/systemd/system/evdi-p13.service
+  run_root systemctl daemon-reload 2>/dev/null || true
   remove_file /etc/modprobe.d/evdi-p13.conf
   remove_file /etc/modules-load.d/evdi-p13.conf
+  # Do not restore displaylink's /etc/modprobe.d/evdi.conf — p13ctl owns evdi config.
 }
 
 remove_libevdi_link() {
@@ -149,6 +159,19 @@ remove_config() {
   fi
 }
 
+remove_boot_display() {
+  local unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/p13-display.service"
+  if systemctl --user is-enabled p13-display.service &>/dev/null; then
+    echo "==> Disabling P13 boot display service"
+    systemctl --user disable --now p13-display.service 2>/dev/null || true
+  fi
+  if [[ -f "$unit" ]]; then
+    rm -f "$unit"
+    echo "    removed $unit"
+  fi
+  systemctl --user daemon-reload 2>/dev/null || true
+}
+
 # --- uninstall ---
 
 if [[ "$DO_EVDI" == "1" ]]; then
@@ -174,6 +197,10 @@ if [[ "$DO_PYTHON" == "1" ]]; then
   remove_python
 fi
 
+if [[ "$DO_BOOT_DISPLAY" == "1" ]]; then
+  remove_boot_display
+fi
+
 if [[ "$DO_CONFIG" == "1" ]]; then
   remove_config
 fi
@@ -189,6 +216,7 @@ Removed:
 $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )
+$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service (boot display)" )
 
 System packages (python3, libusb, dkms, etc.) were left installed.
 Reboot if EVDI was loaded and you removed the module.

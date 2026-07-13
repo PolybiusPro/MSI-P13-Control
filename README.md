@@ -13,6 +13,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | System monitor on LCD | **Experimental** | Software-rendered HUD (`p13ctl sysmon`) |
 | Brightness / rotation (HID) | **Implemented** | `p13ctl hid brightness` / `p13ctl hid rotate` |
 | Display layout persistence | **Implemented** | Position, orientation, brightness saved to `~/.config/p13ctl/` |
+| Boot auto-start | **Implemented** | `p13-display.service` starts virtual monitor at login |
 | Pump / radiator fans | **Motherboard PWM** | Use BIOS/fancontrol — not USB-controlled on P13 |
 | ARGB lighting | **Motherboard ARGB** | Use OpenRGB / motherboard software — not USB-controlled |
 
@@ -37,7 +38,12 @@ p13ctl list
 p13ctl display desktop
 ```
 
-`install.sh` installs system dependencies, EVDI (virtual monitor), udev rules, and `p13ctl` into a local virtualenv. No environment variables required.
+`install.sh` installs system dependencies, EVDI (virtual monitor), udev rules, and `p13ctl` into a local virtualenv. It also enables `p13-display.service` so the panel mirrors your desktop at login. No environment variables required.
+
+```bash
+./install.sh --no-boot-display   # skip login autostart
+systemctl --user status p13-display.service
+```
 
 ```bash
 ./uninstall.sh                  # remove p13ctl artifacts

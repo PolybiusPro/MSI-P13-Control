@@ -20,11 +20,17 @@ LAYOUT_PATH = Path.home() / ".config/p13ctl/display-layout.json"
 _EVDI_PREFIXES = ("DVI-I", "DVI-D", "DVI")
 _PHYSICAL_PREFIXES = ("eDP", "HDMI", "DP-", "Virtual")
 
-_ROTATION_NAMES = {
+# KScreen::Output::Rotation bit flags (see libkscreen output.h)
+_KSCREEN_ROTATION_NAMES: dict[int, str | None] = {
     0: None,
-    1: "right",
-    2: "left",
-    3: "inverted",
+    1: None,  # None = 1 << 0
+    2: "left",  # Left = 1 << 1
+    4: "inverted",  # Inverted = 1 << 2
+    8: "right",  # Right = 1 << 3
+    16: "flipped",
+    32: "flipped90",
+    64: "flipped180",
+    128: "flipped270",
 }
 
 def layout_path() -> Path:
@@ -156,10 +162,21 @@ def _mode_name(output: dict[str, Any]) -> str | None:
             return mode.get("name")
     return None
 
-def _rotation_name(value: int | None) -> str | None:
+def _rotation_name(value: int | str | None) -> str | None:
     if value is None:
         return None
-    return _ROTATION_NAMES.get(int(value))
+    if isinstance(value, str):
+        name = value.strip().lower()
+        if name in ("", "none", "normal"):
+            return None
+        if name in _KSCREEN_ROTATION_NAMES.values():
+            return name
+        return None
+    try:
+        key = int(value)
+    except (TypeError, ValueError):
+        return None
+    return _KSCREEN_ROTATION_NAMES.get(key)
 
 def _find_anchor(virtual: dict[str, Any], outputs: list[dict[str, Any]]) -> tuple[str | None, dict[str, int]]:
     physical = [o for o in outputs if is_physical_output(o["name"])]
@@ -328,6 +345,8 @@ def _kscreen_args_for_virtual(entry: dict[str, Any], position: str | None) -> li
     rotation = entry.get("rotation")
     if rotation:
         args.append(f"output.{name}.rotation.{rotation}")
+    else:
+        args.append(f"output.{name}.rotation.none")
     scale = entry.get("scale")
     if scale not in (None, 1, 1.0):
         args.append(f"output.{name}.scale.{scale}")
