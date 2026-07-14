@@ -33,6 +33,14 @@ _KSCREEN_ROTATION_NAMES: dict[int, str | None] = {
     128: "flipped270",
 }
 
+# Panel / host content degrees → kscreen-doctor rotation name.
+_DEGREE_TO_KSCREEN: dict[int, str] = {
+    0: "none",
+    90: "right",
+    180: "inverted",
+    270: "left",
+}
+
 def layout_path() -> Path:
     return LAYOUT_PATH
 
@@ -108,6 +116,121 @@ def update_saved_panel(**values: int) -> Path:
     panel.update(values)
     return save_display_config(panel=panel)
 
+def set_panel_brightness(percent: int, *, persist: bool = False) -> None:
+    """Set LCD brightness over HID (0–100)."""
+    from p13ctl.hid.msi_p13 import HidError, P13HidController
+
+    value = max(0, min(100, int(percent)))
+    try:
+        with P13HidController() as hid:
+            hid.set_brightness(value)
+    except HidError as exc:
+        raise DisplayError(str(exc)) from exc
+    if persist:
+        update_saved_panel(brightness=value)
+
+def restore_saved_brightness() -> bool:
+    """Apply the last saved brightness (default 100). Does not rewrite config."""
+    config = load_display_config() or {}
+    panel = config.get("panel") or {}
+    try:
+        value = int(panel.get("brightness", 100))
+    except (TypeError, ValueError):
+        value = 100
+    try:
+        set_panel_brightness(value, persist=False)
+        return True
+    except DisplayError as exc:
+        _LOGGER.warning("could not restore brightness: %s", exc)
+        return False
+
+def blank_panel_off() -> None:
+    """Off mode: set brightness to 0 via HID (no USB JPEG / black frame)."""
+    set_panel_brightness(0, persist=False)
+
+def apply_content_rotation(degrees: int) -> str:
+    """Persist rotation and refresh static content so firmware Degree takes effect.
+
+    Degree only applies to newly sent frames — static image/test must be re-pushed.
+    Extended mode also applies KScreen rotation.
+    """
+    if degrees not in (0, 90, 180, 270):
+        raise DisplayError(f"rotation must be 0, 90, 180, or 270 (got {degrees})")
+
+    existing = load_display_config() or {}
+    panel = dict(existing.get("panel") or {})
+    panel["rotation"] = degrees
+    stream = dict(existing.get("stream") or {})
+    # Never stack stream software rotate on top of firmware Degree.
+    stream["rotate"] = 0
+    notes: list[str] = []
+
+    output = find_connected_virtual_output()
+    kname = _DEGREE_TO_KSCREEN[degrees]
+    save_display_config(panel=panel, stream=stream, mode=existing.get("mode"))
+    if output:
+        rotation = None if kname == "none" else kname
+        _patch_virtual_rotation(output, rotation)
+        if _apply_kscreen_rotation(output, kname):
+            notes.append(f"extended output {output} → {kname}")
+        else:
+            notes.append("saved; could not apply KScreen rotation")
+    else:
+        refreshed = _refresh_static_rotation(degrees, existing.get("mode") or {})
+        if refreshed:
+            notes.append(refreshed)
+        else:
+            notes.append("saved for next image/test/sysmon start")
+
+    return "; ".join(notes)
+
+def _patch_virtual_rotation(output: str, rotation: str | None) -> None:
+    data = load_display_config() or {"version": CONFIG_VERSION}
+    virtual = dict(data.get("virtual") or {})
+    virtual["name"] = output
+    virtual["rotation"] = rotation
+    data["virtual"] = virtual
+    data["version"] = CONFIG_VERSION
+    LAYOUT_PATH.parent.mkdir(parents=True, exist_ok=True)
+    LAYOUT_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+
+def _apply_kscreen_rotation(output: str, rotation: str) -> bool:
+    doctor = shutil.which("kscreen-doctor")
+    if doctor is None:
+        return False
+    cmd = [doctor, f"output.{output}.rotation.{rotation}"]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "kscreen-doctor failed").strip()
+        _LOGGER.warning("could not rotate %s: %s", output, detail)
+        return False
+    _LOGGER.info("kscreen rotation %s -> %s", output, rotation)
+    return True
+
+def _refresh_static_rotation(degrees: int, mode: dict[str, Any]) -> str | None:
+    """Re-push image/test so firmware Degree is applied (skip slow HID host setup)."""
+    name = str(mode.get("name") or "")
+    if name not in ("image", "test"):
+        return None
+    try:
+        from p13ctl.display.artinchip import ArtinchipDisplay
+        from p13ctl.display.session import wait_for_display_usb
+
+        wait_for_display_usb(timeout=1.0)
+        # rotate=0 + enable_host=False: Degree orients; skip multi-second HID handoff.
+        with ArtinchipDisplay(rotate=0, enable_host=False) as disp:
+            if name == "image":
+                path = mode.get("image")
+                if not path or not Path(str(path)).is_file():
+                    return None
+                disp.show_static_file(str(path))
+                return f"image refreshed at {degrees}°"
+            disp.show_test_pattern()
+            return f"test pattern refreshed at {degrees}°"
+    except Exception as exc:  # noqa: BLE001 — best-effort refresh
+        _LOGGER.debug("static rotation refresh skipped: %s", exc)
+        return None
+
 def resolve_stream_settings(
     config: dict[str, Any] | None,
     *,
@@ -165,6 +288,7 @@ def _fetch_kscreen_outputs() -> list[dict[str, Any]]:
                 "w": int(size.get("width", 0)),
                 "h": int(size.get("height", 0)),
                 "enabled": bool(item.get("enabled", True)),
+                "priority": int(item.get("priority") or 0),
                 "mode": _mode_name(item),
                 "rotation": _rotation_name(item.get("rotation")),
                 "scale": item.get("scale", 1),
@@ -172,6 +296,49 @@ def _fetch_kscreen_outputs() -> list[dict[str, Any]]:
             }
         )
     return outputs
+
+def physical_outputs(outputs: list[dict[str, Any]] | None = None) -> list[dict[str, Any]]:
+    """Enabled physical displays (excludes EVDI virtual outputs)."""
+    if outputs is None:
+        outputs = _fetch_kscreen_outputs()
+    return [
+        o
+        for o in outputs
+        if o.get("enabled", True)
+        and is_physical_output(o["name"])
+        and not is_evdi_output(o["name"])
+        and int(o.get("w", 0)) > 0
+        and int(o.get("h", 0)) > 0
+    ]
+
+def aligned_virtual_position(
+    *,
+    panel_w: int = 480,
+    panel_h: int = 480,
+    outputs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Place the virtual panel flush against existing monitors.
+
+    Default: immediately to the right of the rightmost physical output, vertically
+    centered on that output so edges sit in the desktop arrangement instead of
+    floating at an arbitrary spot.
+    """
+    physical = physical_outputs(outputs)
+    if not physical:
+        return {
+            "position": "0,0",
+            "anchor": None,
+            "offset": {"x": 0, "y": 0},
+        }
+
+    rightmost = max(physical, key=lambda o: int(o["x"]) + int(o["w"]))
+    x = int(rightmost["x"]) + int(rightmost["w"])
+    y = int(rightmost["y"]) + max(0, (int(rightmost["h"]) - panel_h) // 2)
+    return {
+        "position": f"{x},{y}",
+        "anchor": rightmost["name"],
+        "offset": {"x": int(rightmost["w"]), "y": y - int(rightmost["y"])},
+    }
 
 def _mode_name(output: dict[str, Any]) -> str | None:
     mode_id = output.get("currentModeId")
@@ -206,10 +373,10 @@ def _find_anchor(virtual: dict[str, Any], outputs: list[dict[str, Any]]) -> tupl
     best_name: str | None = None
     best_score: float | None = None
     for anchor in physical:
-        below_gap = virtual["y"] - (anchor["y"] + anchor["h"])
-        if below_gap < -100:
+        right_gap = virtual["x"] - (anchor["x"] + anchor["w"])
+        if right_gap < -100:
             continue
-        score = abs(below_gap) + abs(virtual["x"] - anchor["x"]) * 0.25
+        score = abs(right_gap) + abs(virtual["y"] - anchor["y"]) * 0.25
         if best_score is None or score < best_score:
             best_score = score
             best_name = anchor["name"]

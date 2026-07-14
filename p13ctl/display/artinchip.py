@@ -66,7 +66,7 @@ def _rsa_public_decrypt(pub_key, ciphertext: bytes) -> bytes:
 class ArtinchipDisplay:
     """Drive the P13 LCD via Artinchip bulk JPEG streaming."""
 
-    def __init__(self, rotate: int = 0):
+    def __init__(self, rotate: int = 0, *, enable_host: bool = True):
         self._dev: Optional[usb.core.Device] = None
         self.width = 0
         self.height = 0
@@ -74,6 +74,7 @@ class ArtinchipDisplay:
         self.fps = 0
         self.frame_id = 0
         self.rotate = rotate % 360
+        self._enable_host = enable_host
         self._stop_requested = False
 
     def request_stop(self) -> None:
@@ -111,15 +112,18 @@ class ArtinchipDisplay:
         if not self._authenticate():
             raise DisplayError("Artinchip RSA authentication failed")
         # Firmware keeps the cold-boot splash until host display mode is enabled over HID.
-        try:
-            from p13ctl.hid.msi_p13 import HidError, enable_host_display
+        # Skip on refresh paths (e.g. hid rotate) — host mode is already on and HID
+        # handoff is multi-second.
+        if self._enable_host:
+            try:
+                from p13ctl.hid.msi_p13 import HidError, enable_host_display
 
-            enable_host_display()
-        except HidError as exc:
-            _LOGGER.warning(
-                "could not enable host display mode (splash may remain): %s",
-                exc,
-            )
+                enable_host_display()
+            except HidError as exc:
+                _LOGGER.warning(
+                    "could not enable host display mode (splash may remain): %s",
+                    exc,
+                )
         self.frame_id = 0
         _LOGGER.info("Display connected: %dx%d @ %dfps", self.width, self.height, self.fps)
 

@@ -15,6 +15,7 @@ from .artinchip import DisplayError
 from .evdi_bridge import EvdiBridge, PANEL_HEIGHT, PANEL_WIDTH
 from .layout import (
     LAYOUT_PATH,
+    aligned_virtual_position,
     apply_layout,
     apply_panel_config,
     find_connected_virtual_output,
@@ -102,20 +103,23 @@ def find_evdi_output() -> str | None:
             return out_name
     return None
 
-def _primary_output() -> tuple[str | None, int]:
-    primary_height = 1080
-    primary_name = None
-    for name, is_primary, line in _xrandr_outputs():
+def _rightmost_output() -> tuple[str | None, int, int]:
+    """Return ``(name, x+width, y)`` of the rightmost physical output via xrandr."""
+    right_edge = 0
+    right_y = 0
+    right_name = None
+    for name, _is_primary, line in _xrandr_outputs():
         if any(prefix in name for prefix in _PHYSICAL_PREFIXES):
-            match = re.search(r"(\d+)x(\d+)\+", line)
+            match = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
             if match:
-                height = int(match.group(2))
-                if is_primary or primary_name is None:
-                    primary_name = name
-                    primary_height = height
-            if is_primary:
-                break
-    return primary_name, primary_height
+                width = int(match.group(1))
+                x = int(match.group(3))
+                y = int(match.group(4))
+                if right_name is None or x + width > right_edge:
+                    right_name = name
+                    right_edge = x + width
+                    right_y = y
+    return right_name, right_edge, right_y
 
 def configure_virtual_output(
     output: str | None = None,
@@ -145,7 +149,8 @@ def configure_virtual_output(
     if saved and apply_layout(saved, evdi_output=evdi_output):
         return evdi_output, True
 
-    primary, primary_height = _primary_output()
+    placement = aligned_virtual_position(panel_w=PANEL_WIDTH, panel_h=PANEL_HEIGHT)
+    position = placement["position"]
     mode = f"{PANEL_WIDTH}x{PANEL_HEIGHT}"
 
     def _persist() -> None:
@@ -166,25 +171,39 @@ def configure_virtual_output(
             "kscreen-doctor",
             f"output.{evdi_output}.enable",
             f"output.{evdi_output}.mode.{mode}@60",
-            f"output.{evdi_output}.position.0,{primary_height}",
+            f"output.{evdi_output}.position.{position}",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            _LOGGER.info("configured %s via kscreen-doctor", evdi_output)
+            _LOGGER.info(
+                "configured %s via kscreen-doctor at %s (aligned to %s)",
+                evdi_output,
+                position,
+                placement.get("anchor"),
+            )
             _persist()
             return evdi_output, False
         _LOGGER.debug("kscreen-doctor configure failed: %s", (result.stderr or result.stdout).strip())
 
     xrandr = shutil.which("xrandr")
     if xrandr is not None:
+        rightmost, right_edge, right_y = _rightmost_output()
         cmd = [xrandr, "--output", evdi_output, "--mode", mode, "--rate", "60"]
-        if primary:
-            cmd += ["--below", primary]
+        # Prefer absolute aligned coords when we got them from KScreen; else right of the rightmost.
+        if placement.get("anchor"):
+            x_str, y_str = position.split(",", 1)
+            cmd += ["--pos", f"{x_str}x{y_str}"]
+        elif rightmost:
+            cmd += ["--right-of", rightmost]
         else:
-            cmd += ["--pos", f"0x{primary_height}"]
+            cmd += ["--pos", f"{right_edge}x{right_y}"]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            _LOGGER.info("configured %s at 480x480@60 below %s", evdi_output, primary or "primary")
+            _LOGGER.info(
+                "configured %s at 480x480@60 aligned (%s)",
+                evdi_output,
+                position,
+            )
             _persist()
             return evdi_output, False
         _LOGGER.debug("xrandr configure failed: %s", (result.stderr or result.stdout).strip())
@@ -194,11 +213,11 @@ def configure_virtual_output(
             "kscreen-doctor",
             f"output.{evdi_output}.enable",
             f"output.{evdi_output}.mode.{mode}@60",
-            f"output.{evdi_output}.position.0,{primary_height}",
+            f"output.{evdi_output}.position.{position}",
         ]
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
         if result.returncode == 0:
-            _LOGGER.info("configured %s via kscreen-doctor", evdi_output)
+            _LOGGER.info("configured %s via kscreen-doctor at %s", evdi_output, position)
             _persist()
             return evdi_output, False
         detail = (result.stderr or result.stdout or "kscreen-doctor failed").strip()

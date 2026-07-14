@@ -8,7 +8,12 @@ import sys
 
 from p13ctl.device import list_devices
 from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
-from p13ctl.display.layout import load_display_config, resolve_stream_settings, update_saved_panel
+from p13ctl.display.layout import (
+    apply_content_rotation,
+    load_display_config,
+    resolve_stream_settings,
+    update_saved_panel,
+)
 from p13ctl.hid.msi_p13 import HidError, P13HidController
 
 def _setup_logging(verbose: bool) -> None:
@@ -193,11 +198,20 @@ def cmd_hid_rotate(args: argparse.Namespace) -> int:
     try:
         with P13HidController() as hid_dev:
             hid_dev.set_rotate(args.degrees)
+        detail = ""
         try:
-            update_saved_panel(rotation=args.degrees)
-        except DisplayError:
-            pass
-        print(f"Rotation set to {args.degrees}°.")
+            detail = apply_content_rotation(args.degrees)
+        except DisplayError as exc:
+            # HID Degree was set; content apply is best-effort.
+            try:
+                update_saved_panel(rotation=args.degrees)
+            except DisplayError:
+                pass
+            detail = str(exc)
+        if detail:
+            print(f"Rotation set to {args.degrees}° ({detail}).")
+        else:
+            print(f"Rotation set to {args.degrees}°.")
         return 0
     except (HidError, ValueError) as exc:
         print(f"HID error: {exc}", file=sys.stderr)

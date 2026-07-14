@@ -7,16 +7,18 @@ import subprocess
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QStandardPaths, QThread, QTimer
+from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSlider,
     QStatusBar,
     QVBoxLayout,
     QWidget,
@@ -25,11 +27,15 @@ from PySide6.QtWidgets import (
 from p13ctl.device import list_devices
 from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
 from p13ctl.display.layout import (
+    apply_content_rotation,
+    blank_panel_off,
     find_connected_virtual_output,
     load_display_config,
     reset_saved_layout,
     resolve_stream_settings,
+    restore_saved_brightness,
     save_display_config,
+    set_panel_brightness,
 )
 from p13ctl.display.mode import (
     MODE_EXTENDED,
@@ -41,6 +47,7 @@ from p13ctl.display.mode import (
     update_saved_mode,
 )
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
+from p13ctl.hid.msi_p13 import P13HidController
 
 from .service import (
     mirror_is_running,
@@ -53,6 +60,7 @@ from .workers import MirrorWorker, SysmonWorker, TaskWorker
 _LOGGER = logging.getLogger(__name__)
 
 PANEL_SIZE = (480, 480)
+ROTATIONS = (0, 90, 180, 270)
 
 class MainWindow(QMainWindow):
     def __init__(self) -> None:
@@ -66,11 +74,21 @@ class MainWindow(QMainWindow):
         self._workers: list[QThread] = []
         self._closing = False
         self._updating_mode = False
+        self._updating_rotation = False
+        self._updating_brightness = False
         self._image_path: str | None = None
         self._active_mode: str | None = MODE_OFF
 
+        # Debounce slider drags so each step doesn't open the HID device.
+        self._brightness_timer = QTimer(self)
+        self._brightness_timer.setSingleShot(True)
+        self._brightness_timer.setInterval(300)
+        self._brightness_timer.timeout.connect(self._apply_brightness)
+
         self._build_ui()
         self._load_saved_mode()
+        self._load_saved_rotation()
+        self._load_saved_brightness()
         self._refresh_status()
 
         self._poll_timer = self.startTimer(2000)
@@ -87,6 +105,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(self._device_group(root))
         layout.addWidget(self._display_mode_group(root))
+        layout.addWidget(self._panel_group(root))
 
         reset_btn = QPushButton("Reset saved layout", root)
         reset_btn.clicked.connect(self._reset_layout)
@@ -135,8 +154,30 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._mode_status)
         return box
 
+    def _panel_group(self, parent: QWidget) -> QGroupBox:
+        box = QGroupBox("Panel", parent)
+        form = QFormLayout(box)
+        self._rotation_combo = QComboBox(box)
+        for degrees in ROTATIONS:
+            self._rotation_combo.addItem(f"{degrees}°", degrees)
+        self._rotation_combo.currentIndexChanged.connect(self._on_rotation_changed)
+        form.addRow("Rotation", self._rotation_combo)
+
+        row = QHBoxLayout()
+        self._brightness_slider = QSlider(Qt.Orientation.Horizontal, box)
+        self._brightness_slider.setRange(0, 100)
+        self._brightness_slider.valueChanged.connect(self._on_brightness_changed)
+        self._brightness_label = QLabel("100%", box)
+        row.addWidget(self._brightness_slider)
+        row.addWidget(self._brightness_label)
+        form.addRow("Brightness", row)
+        return box
+
     def _selected_mode(self) -> str:
         return str(self._mode_combo.currentData())
+
+    def _selected_rotation(self) -> int:
+        return int(self._rotation_combo.currentData())
 
     def _set_combo_mode(self, mode: str) -> None:
         index = self._mode_combo.findData(mode)
@@ -146,6 +187,73 @@ class MainWindow(QMainWindow):
         self._mode_combo.setCurrentIndex(index)
         self._image_btn.setVisible(mode == MODE_IMAGE)
         self._updating_mode = False
+
+    def _set_combo_rotation(self, degrees: int) -> None:
+        index = self._rotation_combo.findData(degrees)
+        if index < 0:
+            return
+        self._updating_rotation = True
+        self._rotation_combo.setCurrentIndex(index)
+        self._updating_rotation = False
+
+    def _load_saved_rotation(self) -> None:
+        config = load_display_config() or {}
+        panel = config.get("panel") or {}
+        try:
+            degrees = int(panel.get("rotation", 0))
+        except (TypeError, ValueError):
+            degrees = 0
+        if degrees not in ROTATIONS:
+            degrees = 0
+        self._set_combo_rotation(degrees)
+
+    def _on_rotation_changed(self, _index: int) -> None:
+        if self._updating_rotation or self._closing:
+            return
+        degrees = self._selected_rotation()
+        self._apply_rotation(degrees)
+
+    def _apply_rotation(self, degrees: int) -> None:
+        def _run() -> str:
+            with P13HidController() as hid_dev:
+                hid_dev.set_rotate(degrees)
+            # Release HID before USB display refresh; hidraw is exclusive.
+            return apply_content_rotation(degrees)
+
+        self._run_task(_run, f"Rotation set to {degrees}°")
+
+    def _load_saved_brightness(self) -> None:
+        config = load_display_config() or {}
+        panel = config.get("panel") or {}
+        try:
+            value = int(panel.get("brightness", 100))
+        except (TypeError, ValueError):
+            value = 100
+        value = max(0, min(100, value))
+        self._updating_brightness = True
+        self._brightness_slider.setValue(value)
+        self._updating_brightness = False
+        self._brightness_label.setText(f"{value}%")
+
+    def _on_brightness_changed(self, value: int) -> None:
+        self._brightness_label.setText(f"{value}%")
+        if self._updating_brightness or self._closing:
+            return
+        self._brightness_timer.start()
+
+    def _apply_brightness(self) -> None:
+        if self._closing:
+            return
+        if self._worker_alive(self._action_worker):
+            # Another HID action is in flight — try again after it finishes.
+            self._brightness_timer.start()
+            return
+        value = self._brightness_slider.value()
+
+        def _run() -> None:
+            set_panel_brightness(value, persist=True)
+
+        self._run_task(_run, f"Brightness set to {value}%")
 
     def _worker_alive(self, worker: QThread | None) -> bool:
         if worker is None:
@@ -223,7 +331,7 @@ class MainWindow(QMainWindow):
             else:
                 text = "Solid black — choose an image"
         else:
-            text = "Blank (black)"
+            text = "Off (brightness 0)"
         self._mode_status.setText(text)
         self._image_btn.setVisible(self._selected_mode() == MODE_IMAGE)
 
@@ -276,9 +384,10 @@ class MainWindow(QMainWindow):
             self._blank_display()
             self._active_mode = MODE_OFF
             self._persist_mode(MODE_OFF)
-            self._status.showMessage("Display blanked", 3000)
+            self._status.showMessage("Display off (brightness 0)", 3000)
             self._refresh_mode_status()
             return
+        restore_saved_brightness()
         ok = False
         if mode == MODE_EXTENDED:
             ok = self._start_extended()
@@ -419,16 +528,13 @@ class MainWindow(QMainWindow):
             self._stop_extended(save_layout=True)
 
     def _blank_display(self) -> bool:
-        """Show solid black, then release the USB display interface."""
-        stream = self._stream_values()
+        """Off mode: stop streams and set brightness to 0 over HID."""
+        self._stop_streaming_workers(wait_ms=5000)
         try:
-            wait_for_display_usb(timeout=5.0)
-            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-                black = Image.new("RGB", PANEL_SIZE, (0, 0, 0))
-                disp.send_image(black)
+            blank_panel_off()
             return True
         except DisplayError as exc:
-            _LOGGER.warning("could not blank display: %s", exc)
+            _LOGGER.warning("could not turn display off: %s", exc)
             return False
 
     def _show_black(self) -> None:

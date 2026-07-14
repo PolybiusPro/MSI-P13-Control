@@ -11,7 +11,13 @@ from typing import Any
 from PIL import Image
 
 from .artinchip import ArtinchipDisplay, DisplayError
-from .layout import load_display_config, resolve_stream_settings, save_display_config
+from .layout import (
+    blank_panel_off,
+    load_display_config,
+    resolve_stream_settings,
+    restore_saved_brightness,
+    save_display_config,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -63,11 +69,6 @@ def _stream() -> dict[str, int]:
         rotate=None,
     )
 
-def _blank_display() -> None:
-    stream = _stream()
-    with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-        disp.send_image(Image.new("RGB", PANEL_SIZE, (0, 0, 0)))
-
 def run_saved_display_mode() -> int:
     """Apply the saved Display Mode (used at login by p13-display.service).
 
@@ -81,12 +82,14 @@ def run_saved_display_mode() -> int:
 
     if name == MODE_OFF:
         try:
-            _blank_display()
-            print("Display blanked (mode: off).")
+            blank_panel_off()
+            print("Display off (brightness 0).")
         except DisplayError as exc:
             print(f"Display error: {exc}", flush=True)
             return 1
         return 0
+
+    restore_saved_brightness()
 
     if name == MODE_TEST:
         try:
