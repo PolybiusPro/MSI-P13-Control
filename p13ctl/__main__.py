@@ -124,6 +124,11 @@ def cmd_display_mode(_args: argparse.Namespace) -> int:
         print()
         return 0
 
+def cmd_display_sleepwatch(args: argparse.Namespace) -> int:
+    from p13ctl.display.sleepwatch import run_sleep_watch
+
+    return run_sleep_watch(interval=args.interval)
+
 def cmd_display_monitor(args: argparse.Namespace) -> int:
     """Alias for display desktop (virtual monitor)."""
     return cmd_display_desktop(args)
@@ -309,6 +314,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Apply saved Display Mode from ~/.config/p13ctl (used at login)",
     )
     p_dmode.set_defaults(func=cmd_display_mode)
+    p_sw = disp_sub.add_parser(
+        "sleepwatch",
+        help="Blank panel while desktop displays sleep (used by p13-panel-off.service)",
+    )
+    p_sw.add_argument("--interval", type=float, default=10.0)
+    p_sw.set_defaults(func=cmd_display_sleepwatch)
     p_dm = disp_sub.add_parser(
         "monitor",
         help="Alias for display desktop (EVDI virtual monitor)",

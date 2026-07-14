@@ -358,7 +358,7 @@ install_boot_display() {
   if systemctl --user daemon-reload 2>/dev/null; then
     systemctl --user enable p13-display.service p13-panel-off.service
     echo "    Enabled p13-display.service (starts at graphical login)"
-    echo "    Enabled p13-panel-off.service (panel off at logout/shutdown)"
+    echo "    Enabled p13-panel-off.service (panel off on display sleep, logout, shutdown)"
     if systemctl --user is-active --quiet graphical-session.target 2>/dev/null; then
       systemctl --user start p13-panel-off.service 2>/dev/null || true
       systemctl --user start p13-display.service 2>/dev/null || true

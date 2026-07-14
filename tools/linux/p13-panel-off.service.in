@@ -1,16 +1,18 @@
 [Unit]
-Description=MSI P13 panel off at logout/shutdown
+Description=MSI P13 panel off on display sleep and at logout/shutdown
 Documentation=file://@ROOT@/README.md
 # Stops after p13-display.service so brightness 0 is the last panel command.
 Before=p13-display.service
 PartOf=graphical-session.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
-ExecStart=/usr/bin/true
+Type=simple
+ExecStart=@P13CTL_BIN@ display sleepwatch
 ExecStop=@P13CTL_BIN@ hid brightness 0 --no-save
+Restart=on-failure
+RestartSec=10
 TimeoutStopSec=10
+Environment=PYTHONUNBUFFERED=1
 
 [Install]
 WantedBy=graphical-session.target
