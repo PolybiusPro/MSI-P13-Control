@@ -9,9 +9,11 @@ from pathlib import Path
 from PIL import Image
 from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -38,6 +40,7 @@ from p13ctl.display.layout import (
     set_panel_brightness,
 )
 from p13ctl.display.mode import (
+    MODE_CLOCK,
     MODE_EXTENDED,
     MODE_IMAGE,
     MODE_OFF,
@@ -55,7 +58,7 @@ from .service import (
     start_mirror_service,
     stop_mirror_service,
 )
-from .workers import MirrorWorker, SysmonWorker, TaskWorker
+from .workers import FaceWorker, MirrorWorker, TaskWorker
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -69,13 +72,15 @@ class MainWindow(QMainWindow):
         self.setMinimumWidth(420)
 
         self._mirror_worker: MirrorWorker | None = None
-        self._sysmon_worker: SysmonWorker | None = None
+        self._sysmon_worker: FaceWorker | None = None
         self._action_worker: TaskWorker | None = None
         self._workers: list[QThread] = []
         self._closing = False
         self._updating_mode = False
         self._updating_rotation = False
         self._updating_brightness = False
+        self._updating_clock_style = False
+        self._updating_sysmon = False
         self._image_path: str | None = None
         self._active_mode: str | None = MODE_OFF
 
@@ -84,6 +89,12 @@ class MainWindow(QMainWindow):
         self._brightness_timer.setSingleShot(True)
         self._brightness_timer.setInterval(300)
         self._brightness_timer.timeout.connect(self._apply_brightness)
+
+        # Debounce monitor option toggles; each apply restarts the face worker.
+        self._sysmon_opts_timer = QTimer(self)
+        self._sysmon_opts_timer.setSingleShot(True)
+        self._sysmon_opts_timer.setInterval(750)
+        self._sysmon_opts_timer.timeout.connect(self._apply_sysmon_opts)
 
         self._build_ui()
         self._load_saved_mode()
@@ -140,6 +151,7 @@ class MainWindow(QMainWindow):
         self._mode_combo.addItem("Test pattern", MODE_TEST)
         self._mode_combo.addItem("Image", MODE_IMAGE)
         self._mode_combo.addItem("System monitor", MODE_SYSMON)
+        self._mode_combo.addItem("Clock", MODE_CLOCK)
         self._mode_combo.currentIndexChanged.connect(self._on_mode_combo_changed)
         layout.addWidget(self._mode_combo)
 
@@ -147,6 +159,43 @@ class MainWindow(QMainWindow):
         self._image_btn.clicked.connect(self._choose_image)
         self._image_btn.setVisible(False)
         layout.addWidget(self._image_btn)
+
+        self._clock_style_combo = QComboBox(box)
+        for style in range(1, 7):
+            self._clock_style_combo.addItem(f"Style {style}", style)
+        self._clock_style_combo.currentIndexChanged.connect(self._on_clock_style_changed)
+        self._clock_style_combo.setVisible(False)
+        layout.addWidget(self._clock_style_combo)
+
+        self._sysmon_opts = QWidget(box)
+        opts = QVBoxLayout(self._sysmon_opts)
+        opts.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Switch every", self._sysmon_opts))
+        self._switch_combo = QComboBox(self._sysmon_opts)
+        for sec in (5, 10, 15, 20, 30):  # same choices as the Windows app
+            self._switch_combo.addItem(f"{sec} s", sec)
+        self._switch_combo.setCurrentIndex(1)
+        self._switch_combo.currentIndexChanged.connect(self._on_sysmon_opts_changed)
+        row.addWidget(self._switch_combo)
+        row.addStretch()
+        opts.addLayout(row)
+        grid = QGridLayout()
+        self._stat_checks: list[QCheckBox] = []
+        for i, stat in enumerate(self._available_stats()):
+            label = " ".join(
+                w if w in ("CPU", "GPU", "RAM", "SYS") else w.capitalize()
+                for w in stat["title"].split()
+            )
+            check = QCheckBox(label, self._sysmon_opts)
+            check.setProperty("key", stat["key"])
+            check.setChecked(True)
+            check.toggled.connect(self._on_sysmon_opts_changed)
+            grid.addWidget(check, i // 2, i % 2)
+            self._stat_checks.append(check)
+        opts.addLayout(grid)
+        self._sysmon_opts.setVisible(False)
+        layout.addWidget(self._sysmon_opts)
 
         self._mode_status = QLabel("Off", box)
         self._mode_status.setStyleSheet("color: palette(mid);")
@@ -186,6 +235,8 @@ class MainWindow(QMainWindow):
         self._updating_mode = True
         self._mode_combo.setCurrentIndex(index)
         self._image_btn.setVisible(mode == MODE_IMAGE)
+        self._clock_style_combo.setVisible(mode == MODE_CLOCK)
+        self._sysmon_opts.setVisible(mode == MODE_SYSMON)
         self._updating_mode = False
 
     def _set_combo_rotation(self, degrees: int) -> None:
@@ -299,21 +350,40 @@ class MainWindow(QMainWindow):
         self._sync_combo_from_runtime()
         self._refresh_mode_status()
 
+    def _service_running(self) -> bool:
+        return mirror_service_installed() and mirror_is_running()
+
+    def _service_display_mode(self) -> str | None:
+        """Mode hosted by p13-display.service (it runs the saved mode), if active."""
+        if not self._service_running():
+            return None
+        name = get_saved_mode()["name"]
+        return name if name in (MODE_EXTENDED, MODE_SYSMON, MODE_CLOCK) else None
+
     def _mirror_running(self) -> bool:
-        if mirror_service_installed():
-            return mirror_is_running()
+        if self._service_running():
+            return self._service_display_mode() == MODE_EXTENDED
         return self._worker_alive(self._mirror_worker)
+
+    def _face_worker_mode(self) -> str:
+        worker = self._sysmon_worker
+        return MODE_CLOCK if worker is not None and worker.face == "clock" else MODE_SYSMON
 
     def _sync_combo_from_runtime(self) -> None:
         """If an external service is already running, reflect that in the combo."""
         if self._closing or self._updating_mode:
             return
-        if self._mirror_running() and self._active_mode != MODE_EXTENDED:
-            self._active_mode = MODE_EXTENDED
-            self._set_combo_mode(MODE_EXTENDED)
-        elif self._worker_alive(self._sysmon_worker) and self._active_mode != MODE_SYSMON:
-            self._active_mode = MODE_SYSMON
-            self._set_combo_mode(MODE_SYSMON)
+        service_mode = self._service_display_mode()
+        if service_mode is not None and self._active_mode != service_mode:
+            self._active_mode = service_mode
+            self._set_combo_mode(service_mode)
+        elif (
+            service_mode is None
+            and self._worker_alive(self._sysmon_worker)
+            and self._active_mode != self._face_worker_mode()
+        ):
+            self._active_mode = self._face_worker_mode()
+            self._set_combo_mode(self._active_mode)
 
     def _refresh_mode_status(self) -> None:
         if self._closing:
@@ -321,8 +391,14 @@ class MainWindow(QMainWindow):
         mode = self._active_mode or MODE_OFF
         if mode == MODE_EXTENDED and self._mirror_running():
             text = "Extended display running"
-        elif mode == MODE_SYSMON and self._worker_alive(self._sysmon_worker):
+        elif mode == MODE_SYSMON and (
+            self._service_display_mode() == MODE_SYSMON or self._worker_alive(self._sysmon_worker)
+        ):
             text = "System monitor running"
+        elif mode == MODE_CLOCK and (
+            self._service_display_mode() == MODE_CLOCK or self._worker_alive(self._sysmon_worker)
+        ):
+            text = f"Clock running (style {self._selected_clock_style()})"
         elif mode == MODE_TEST:
             text = "Test pattern on panel"
         elif mode == MODE_IMAGE:
@@ -334,25 +410,98 @@ class MainWindow(QMainWindow):
             text = "Off (brightness 0)"
         self._mode_status.setText(text)
         self._image_btn.setVisible(self._selected_mode() == MODE_IMAGE)
+        self._clock_style_combo.setVisible(self._selected_mode() == MODE_CLOCK)
+        self._sysmon_opts.setVisible(self._selected_mode() == MODE_SYSMON)
 
     def _on_mode_combo_changed(self, _index: int) -> None:
         if self._updating_mode or self._closing:
             return
         mode = self._selected_mode()
         self._image_btn.setVisible(mode == MODE_IMAGE)
+        self._clock_style_combo.setVisible(mode == MODE_CLOCK)
+        self._sysmon_opts.setVisible(mode == MODE_SYSMON)
         if mode == self._active_mode:
             self._refresh_mode_status()
             return
         self._apply_mode(mode)
 
+    def _available_stats(self) -> list[dict]:
+        try:
+            from p13ctl.display.faces import HwSensors
+
+            return HwSensors().read()
+        except Exception as exc:  # noqa: BLE001 — sensors are best-effort in the GUI
+            _LOGGER.warning("could not enumerate hardware stats: %s", exc)
+            return []
+
+    def _checked_stat_keys(self) -> list[str]:
+        """Selected stat keys; empty list means no filter (all stats)."""
+        checked = [str(cb.property("key")) for cb in self._stat_checks if cb.isChecked()]
+        if not checked or len(checked) == len(self._stat_checks):
+            return []
+        return checked
+
+    def _selected_switch(self) -> int:
+        return int(self._switch_combo.currentData())
+
+    def _on_sysmon_opts_changed(self, *_args) -> None:
+        if self._updating_sysmon or self._closing:
+            return
+        self._sysmon_opts_timer.start()
+
+    def _apply_sysmon_opts(self) -> None:
+        if self._closing or self._active_mode != MODE_SYSMON:
+            return
+        self._persist_mode(MODE_SYSMON, switch=self._selected_switch(), items=self._checked_stat_keys())
+        self._apply_mode(MODE_SYSMON)
+
+    def _load_saved_sysmon(self, saved: dict) -> None:
+        self._updating_sysmon = True
+        index = self._switch_combo.findData(int(saved.get("switch") or 10))
+        if index >= 0:
+            self._switch_combo.setCurrentIndex(index)
+        items = saved.get("items")
+        for check in self._stat_checks:
+            check.setChecked(items is None or check.property("key") in items)
+        self._updating_sysmon = False
+
+    def _selected_clock_style(self) -> int:
+        return int(self._clock_style_combo.currentData())
+
+    def _set_clock_style(self, style: int) -> None:
+        index = self._clock_style_combo.findData(style)
+        if index < 0:
+            return
+        self._updating_clock_style = True
+        self._clock_style_combo.setCurrentIndex(index)
+        self._updating_clock_style = False
+
+    def _on_clock_style_changed(self, _index: int) -> None:
+        if self._updating_clock_style or self._closing:
+            return
+        style = self._selected_clock_style()
+        self._persist_mode(MODE_CLOCK, style=style)
+        if self._active_mode == MODE_CLOCK:
+            self._apply_mode(MODE_CLOCK)
+
     def _load_saved_mode(self) -> None:
         saved = get_saved_mode()
         self._image_path = saved.get("image")
+        self._set_clock_style(int(saved.get("style") or 1))
+        self._load_saved_sysmon(saved)
         self._set_combo_mode(saved["name"])
 
-    def _persist_mode(self, name: str, *, image: str | None = None) -> None:
+    def _persist_mode(
+        self,
+        name: str,
+        *,
+        image: str | None = None,
+        style: int | None = None,
+        switch: int | None = None,
+        items: list[str] | None = None,
+    ) -> None:
         try:
-            update_saved_mode(name=name, image=image)
+            update_saved_mode(name=name, image=image, style=style, switch=switch, items=items)
         except DisplayError as exc:
             _LOGGER.warning("could not save display mode: %s", exc)
 
@@ -361,14 +510,15 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         saved = get_saved_mode()["name"]
-        if self._mirror_running():
-            self._active_mode = MODE_EXTENDED
-            self._set_combo_mode(MODE_EXTENDED)
+        service_mode = self._service_display_mode()
+        if service_mode is not None:
+            self._active_mode = service_mode
+            self._set_combo_mode(service_mode)
             self._refresh_mode_status()
             return
         if self._worker_alive(self._sysmon_worker):
-            self._active_mode = MODE_SYSMON
-            self._set_combo_mode(MODE_SYSMON)
+            self._active_mode = self._face_worker_mode()
+            self._set_combo_mode(self._active_mode)
             self._refresh_mode_status()
             return
         if saved == MODE_OFF or saved == self._active_mode:
@@ -397,6 +547,8 @@ class MainWindow(QMainWindow):
             ok = self._start_image_mode()
         elif mode == MODE_SYSMON:
             ok = self._start_sysmon()
+        elif mode == MODE_CLOCK:
+            ok = self._start_clock()
         if not ok:
             self._blank_display()
             self._active_mode = MODE_OFF
@@ -405,11 +557,17 @@ class MainWindow(QMainWindow):
             self._refresh_mode_status()
             return
         self._active_mode = mode
-        self._persist_mode(mode, image=self._image_path if mode == MODE_IMAGE else None)
+        self._persist_mode(
+            mode,
+            image=self._image_path if mode == MODE_IMAGE else None,
+            style=self._selected_clock_style() if mode == MODE_CLOCK else None,
+            switch=self._selected_switch() if mode == MODE_SYSMON else None,
+            items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
+        )
         self._refresh_mode_status()
 
     def _stop_current_mode(self, *, save_layout: bool) -> None:
-        if self._mirror_running() or self._worker_alive(self._mirror_worker):
+        if self._service_running() or self._worker_alive(self._mirror_worker):
             self._stop_extended(save_layout=save_layout)
         if self._worker_alive(self._sysmon_worker):
             assert self._sysmon_worker is not None
@@ -524,8 +682,8 @@ class MainWindow(QMainWindow):
             self._sysmon_worker.request_stop()
             self._sysmon_worker.wait(wait_ms)
             self._sysmon_worker = None
-        if self._mirror_running() or self._worker_alive(self._mirror_worker):
-            self._stop_extended(save_layout=True)
+        if self._service_running() or self._worker_alive(self._mirror_worker):
+            self._stop_extended(save_layout=self._mirror_running() or self._worker_alive(self._mirror_worker))
 
     def _blank_display(self) -> bool:
         """Off mode: stop streams and set brightness to 0 over HID."""
@@ -603,17 +761,55 @@ class MainWindow(QMainWindow):
         self._refresh_mode_status()
 
     def _start_sysmon(self) -> bool:
+        return self._start_face("sysmon", "System monitor")
+
+    def _start_clock(self) -> bool:
+        return self._start_face("clock", "Clock")
+
+    def _start_face(self, face: str, label: str) -> bool:
+        message = f"{label} started"
         if not self._release_usb_for_static():
             return False
+        if mirror_service_installed():
+            # Persist first, then let the login service host the face so it
+            # keeps running after the GUI closes (same pattern as extended).
+            mode = MODE_CLOCK if face == "clock" else MODE_SYSMON
+            self._persist_mode(
+                mode,
+                style=self._selected_clock_style() if mode == MODE_CLOCK else None,
+                switch=self._selected_switch() if mode == MODE_SYSMON else None,
+                items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
+            )
+            try:
+                start_mirror_service()
+            except subprocess.CalledProcessError as exc:
+                detail = (exc.stderr or exc.stdout or str(exc)).strip()
+                self._show_error(f"Could not start {label.lower()}", detail)
+                return False
+            self._status.showMessage(message, 3000)
+            return True
         stream = self._stream_values()
-        self._sysmon_worker = SysmonWorker(rotate=stream["rotate"], parent=self)
+        self._sysmon_worker = FaceWorker(
+            rotate=stream["rotate"],
+            face=face,
+            style=self._selected_clock_style(),
+            switch=float(self._selected_switch()),
+            items=self._checked_stat_keys() or None,
+            parent=self,
+        )
         self._sysmon_worker.error.connect(self._on_sysmon_error)
         self._sysmon_worker.stopped.connect(self._on_sysmon_stopped)
         self._sysmon_worker.start()
-        self._status.showMessage("System monitor started", 3000)
+        self._status.showMessage(message, 3000)
         return True
 
+    def _stale_face_signal(self) -> bool:
+        """True when a replaced worker's queued signal arrives after a restart."""
+        return self._sysmon_worker is not None and self.sender() is not self._sysmon_worker
+
     def _on_sysmon_error(self, msg: str) -> None:
+        if self._stale_face_signal():
+            return
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
         self._show_error("System monitor failed", msg)
@@ -621,8 +817,10 @@ class MainWindow(QMainWindow):
         self._refresh_mode_status()
 
     def _on_sysmon_stopped(self) -> None:
+        if self._stale_face_signal():
+            return
         self._sysmon_worker = None
-        if self._active_mode == MODE_SYSMON and self._selected_mode() == MODE_SYSMON:
+        if self._active_mode in (MODE_SYSMON, MODE_CLOCK) and self._selected_mode() == self._active_mode:
             self._active_mode = MODE_OFF
             self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
@@ -687,7 +885,17 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         stop_active_sessions()
-        self._stop_streaming_workers(wait_ms=5000)
+        # In-process workers die with the GUI; the p13-display service
+        # (extended/sysmon/clock) is left running so the panel persists.
+        if self._worker_alive(self._sysmon_worker):
+            assert self._sysmon_worker is not None
+            self._sysmon_worker.request_stop()
+            self._sysmon_worker.wait(5000)
+        if self._worker_alive(self._mirror_worker):
+            assert self._mirror_worker is not None
+            self._persist_layout_now()
+            self._mirror_worker.request_stop()
+            self._mirror_worker.wait(5000)
         for worker in list(self._workers):
             try:
                 worker.finished.disconnect()

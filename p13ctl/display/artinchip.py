@@ -253,37 +253,20 @@ class ArtinchipDisplay:
             if sleep_for > 0:
                 time.sleep(sleep_for)
 
-    def run_sysmon(self, interval: float = 1.0) -> None:
-        try:
-            import psutil
-        except ImportError as exc:
-            raise DisplayError("sysmon requires: pip install p13ctl[sysmon]") from exc
+    def run_sysmon(
+        self,
+        interval: float = 1.0,
+        *,
+        switch: float = 10.0,
+        items: list[str] | None = None,
+    ) -> None:
+        """Rotate through hardware stats like a hardware monitor."""
+        from .faces import run_hwmon
 
-        from PIL import ImageDraw, ImageFont
+        run_hwmon(self, refresh_s=interval, switch_s=switch, items=items)
 
-        w, h = self.width or 480, self.height or 480
-        while not self._stop_requested:
-            img = Image.new("RGB", (w, h), (12, 14, 20))
-            draw = ImageDraw.Draw(img)
-            temps = psutil.sensors_temperatures() if hasattr(psutil, "sensors_temperatures") else {}
-            cpu_temp = None
-            for name, entries in temps.items():
-                if "core" in name.lower() or "cpu" in name.lower() or "k10" in name.lower():
-                    if entries:
-                        cpu_temp = entries[0].current
-                        break
-            cpu = psutil.cpu_percent()
-            mem = psutil.virtual_memory().percent
-            lines = [
-                "P13 sysmon",
-                f"CPU {cpu:4.0f}%",
-                f"RAM {mem:4.0f}%",
-            ]
-            if cpu_temp is not None:
-                lines.append(f"CPU {cpu_temp:.0f} C")
-            y = 36
-            for line in lines:
-                draw.text((32, y), line, fill=(180, 220, 255))
-                y += 44
-            self.send_image(img)
-            time.sleep(interval)
+    def run_clock(self, style: int = 1) -> None:
+        """Show a digital clock face (styles 1-6 as in the Windows app)."""
+        from .faces import run_clock
+
+        run_clock(self, style=style)

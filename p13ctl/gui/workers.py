@@ -83,8 +83,8 @@ class MirrorWorker(QThread):
             stop_active_sessions()
             self.stopped.emit()
 
-class SysmonWorker(QThread):
-    """Run the software system monitor loop."""
+class FaceWorker(QThread):
+    """Run a panel face loop (hardware monitor or clock)."""
 
     error = Signal(str)
     stopped = Signal()
@@ -93,11 +93,19 @@ class SysmonWorker(QThread):
         self,
         *,
         rotate: int,
+        face: str = "sysmon",
+        style: int = 1,
+        switch: float = 10.0,
+        items: list[str] | None = None,
         interval: float = 1.0,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
         self.rotate = rotate
+        self.face = face
+        self.style = style
+        self.switch = switch
+        self.items = items
         self.interval = interval
         self._stop = False
         self._display = None
@@ -117,7 +125,10 @@ class SysmonWorker(QThread):
         try:
             with ArtinchipDisplay(rotate=self.rotate) as disp:
                 self._display = disp
-                disp.run_sysmon(interval=self.interval)
+                if self.face == "clock":
+                    disp.run_clock(style=self.style)
+                else:
+                    disp.run_sysmon(interval=self.interval, switch=self.switch, items=self.items)
         except DisplayError as exc:
             if not self._stop:
                 self.error.emit(str(exc))
