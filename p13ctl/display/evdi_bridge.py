@@ -14,6 +14,7 @@ from PIL import Image
 from . import evdi_wrapper as evdi
 from .artinchip import ArtinchipDisplay, DisplayError
 from .edid import generate_edid
+from .layout import blank_panel_off, restore_saved_brightness
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -52,6 +53,7 @@ class EvdiBridge:
         self._edid = generate_edid()
         self._jpeg_buf = io.BytesIO()
         self._last_usb_retry = 0.0
+        self._dpms_asleep = False
 
     def setup_evdi(self) -> None:
         version = evdi.get_lib_version()
@@ -157,8 +159,8 @@ class EvdiBridge:
 
         self._cb_update = evdi.UPDATE_READY_HANDLER(lambda _buf_id, _ud: None)
         self._cb_mode = evdi.MODE_CHANGED_HANDLER(self._on_mode_changed)
-        self._cb_dpms = evdi.DPMS_HANDLER(lambda _mode, _ud: None)
-        self._cb_crtc = evdi.CRTC_STATE_HANDLER(lambda _state, _ud: None)
+        self._cb_dpms = evdi.DPMS_HANDLER(self._on_dpms)
+        self._cb_crtc = evdi.CRTC_STATE_HANDLER(self._on_crtc_state)
         self._cb_cursor_set = evdi.CURSOR_SET_HANDLER(lambda _cs, _ud: None)
         self._cb_cursor_move = evdi.CURSOR_MOVE_HANDLER(lambda _cm, _ud: None)
         self._cb_ddcci = evdi.DDCCI_HANDLER(lambda _dd, _ud: None)
@@ -240,6 +242,30 @@ class EvdiBridge:
                 _LOGGER.info("stream: %.1f fps", stats_frames / (now - stats_t0))
                 stats_t0 = now
                 stats_frames = 0
+
+    def _on_dpms(self, mode, _user_data) -> None:
+        # DRM DPMS: 0 = on; standby/suspend/off = sleeping
+        _LOGGER.info("EVDI DPMS event: mode=%d", mode)
+        self._set_panel_asleep(mode != 0)
+
+    def _on_crtc_state(self, state, _user_data) -> None:
+        # KWin (Wayland) signals display sleep by disabling the CRTC.
+        _LOGGER.info("EVDI CRTC state event: state=%d", state)
+        self._set_panel_asleep(state == 0)
+
+    def _set_panel_asleep(self, asleep: bool) -> None:
+        """Mirror desktop display sleep onto the panel backlight over HID."""
+        if asleep == self._dpms_asleep:
+            return
+        self._dpms_asleep = asleep
+        _LOGGER.info("panel %s with desktop display power", "sleep" if asleep else "wake")
+        try:
+            if asleep:
+                blank_panel_off()
+            else:
+                restore_saved_brightness()
+        except DisplayError as exc:
+            _LOGGER.warning("could not sync panel brightness with display power: %s", exc)
 
     def _on_mode_changed(self, mode, _user_data) -> None:
         _LOGGER.info(

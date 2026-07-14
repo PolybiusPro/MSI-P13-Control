@@ -1,0 +1,16 @@
+[Unit]
+Description=MSI P13 panel off at logout/shutdown
+Documentation=file://@ROOT@/README.md
+# Stops after p13-display.service so brightness 0 is the last panel command.
+Before=p13-display.service
+PartOf=graphical-session.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/bin/true
+ExecStop=@P13CTL_BIN@ hid brightness 0 --no-save
+TimeoutStopSec=10
+
+[Install]
+WantedBy=graphical-session.target

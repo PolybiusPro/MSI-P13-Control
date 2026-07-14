@@ -21,7 +21,6 @@ from .layout import (
     find_connected_virtual_output,
     load_display_config,
     load_layout,
-    read_panel_state,
     reset_saved_layout,
     save_display_config,
 )
@@ -292,17 +291,11 @@ def run_virtual_monitor(
         bridge.run()
     finally:
         if save_layout and output_name:
-            panel = None
             try:
-                panel = read_panel_state()
-            except DisplayError as exc:
-                _LOGGER.debug("could not read panel settings on exit: %s", exc)
-                if saved_config:
-                    panel = saved_config.get("panel")
-            try:
+                # panel is omitted on purpose: brightness/rotation persist when set,
+                # and the live value may be a transient blank (sleep/off = 0).
                 save_display_config(
                     virtual_output=output_name,
-                    panel=panel,
                     stream={"fps": fps, "quality": quality, "rotate": rotate},
                 )
                 print(f"Saved P13 settings to {LAYOUT_PATH}")

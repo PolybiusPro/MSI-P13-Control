@@ -163,15 +163,18 @@ remove_config() {
 }
 
 remove_boot_display() {
-  local unit="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/p13-display.service"
-  if systemctl --user is-enabled p13-display.service &>/dev/null; then
-    echo "==> Disabling P13 boot display service"
-    systemctl --user disable --now p13-display.service 2>/dev/null || true
-  fi
-  if [[ -f "$unit" ]]; then
-    rm -f "$unit"
-    echo "    removed $unit"
-  fi
+  local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
+  local name
+  for name in p13-display.service p13-panel-off.service; do
+    if systemctl --user is-enabled "$name" &>/dev/null; then
+      echo "==> Disabling $name"
+      systemctl --user disable --now "$name" 2>/dev/null || true
+    fi
+    if [[ -f "$unit_dir/$name" ]]; then
+      rm -f "$unit_dir/$name"
+      echo "    removed $unit_dir/$name"
+    fi
+  done
   systemctl --user daemon-reload 2>/dev/null || true
 }
 
@@ -235,7 +238,7 @@ Removed:
 $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )
-$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service (boot display)" )
+$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service / p13-panel-off.service (boot display, panel off)" )
 $( [[ "$DO_GUI" == "1" ]] && echo "  - p13ctl-gui desktop launcher" )
 
 System packages (python3, libusb, dkms, etc.) were left installed.

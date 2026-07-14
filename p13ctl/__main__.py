@@ -184,10 +184,11 @@ def cmd_hid_brightness(args: argparse.Namespace) -> int:
     try:
         with P13HidController() as hid_dev:
             hid_dev.set_brightness(args.percent)
-        try:
-            update_saved_panel(brightness=args.percent)
-        except DisplayError:
-            pass
+        if not args.no_save:
+            try:
+                update_saved_panel(brightness=args.percent)
+            except DisplayError:
+                pass
         print(f"Brightness set to {args.percent}%.")
         return 0
     except HidError as exc:
@@ -340,6 +341,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_host.set_defaults(func=cmd_hid_host)
     p_br = hid_sub.add_parser("brightness", help="Set LCD brightness (0-100)")
     p_br.add_argument("percent", type=int)
+    p_br.add_argument(
+        "--no-save",
+        action="store_true",
+        help="Do not persist the value (for sleep/shutdown hooks)",
+    )
     p_br.set_defaults(func=cmd_hid_brightness)
     p_rot = hid_sub.add_parser("rotate", help="Set panel rotation")
     p_rot.add_argument("degrees", type=int, choices=[0, 90, 180, 270])

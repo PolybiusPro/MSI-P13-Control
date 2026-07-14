@@ -353,15 +353,19 @@ install_boot_display() {
   mkdir -p "$unit_dir"
   sed -e "s|@ROOT@|$ROOT|g" -e "s|@P13CTL_BIN@|$p13ctl_bin|g" \
     "$LINUX/p13-display.service.in" > "$unit_dir/p13-display.service"
+  sed -e "s|@ROOT@|$ROOT|g" -e "s|@P13CTL_BIN@|$p13ctl_bin|g" \
+    "$LINUX/p13-panel-off.service.in" > "$unit_dir/p13-panel-off.service"
   if systemctl --user daemon-reload 2>/dev/null; then
-    systemctl --user enable p13-display.service
+    systemctl --user enable p13-display.service p13-panel-off.service
     echo "    Enabled p13-display.service (starts at graphical login)"
+    echo "    Enabled p13-panel-off.service (panel off at logout/shutdown)"
     if systemctl --user is-active --quiet graphical-session.target 2>/dev/null; then
+      systemctl --user start p13-panel-off.service 2>/dev/null || true
       systemctl --user start p13-display.service 2>/dev/null || true
     fi
   else
-    echo "    Wrote $unit_dir/p13-display.service"
-    echo "    Run after login: systemctl --user daemon-reload && systemctl --user enable --now p13-display.service"
+    echo "    Wrote $unit_dir/p13-display.service and p13-panel-off.service"
+    echo "    Run after login: systemctl --user daemon-reload && systemctl --user enable --now p13-display.service p13-panel-off.service"
   fi
 }
 
