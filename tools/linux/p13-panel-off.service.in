@@ -4,8 +4,11 @@ Documentation=file://@ROOT@/README.md
 # Stops after p13-display.service so brightness 0 is the last panel command.
 Before=p13-display.service
 PartOf=graphical-session.target
-# The user manager stops this unit for both logout and machine shutdown. Keep
-# the HID off command ahead of the final user-manager exit transaction.
+# The user manager stops this unit for both logout and machine shutdown. The
+# ordering runs the stop job at the start of the exit transaction, while the
+# session is still up. sleepwatch additionally holds a logind shutdown delay
+# lock and blanks the panel on PrepareForShutdown, so poweroff/reboot waits
+# for brightness 0 before tearing anything down.
 Before=exit.target shutdown.target
 Conflicts=exit.target shutdown.target
 

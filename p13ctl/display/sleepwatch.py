@@ -21,6 +21,7 @@ from .layout import (
     restore_saved_brightness,
 )
 from .mode import MODE_EXTENDED, MODE_OFF, get_saved_mode
+from .shutdown_inhibit import ShutdownInhibitor
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -65,19 +66,36 @@ def _sync_panel(asleep: bool) -> None:
     except DisplayError as exc:
         _LOGGER.warning("could not sync panel brightness: %s", exc)
 
+def _blank_for_shutdown() -> None:
+    try:
+        blank_panel_off()
+    except DisplayError as exc:
+        _LOGGER.warning("could not blank panel for shutdown: %s", exc)
+
 def run_sleep_watch(*, interval: float = 10.0) -> int:
-    """Poll desktop DPMS and blank/restore the panel on transitions."""
+    """Poll desktop DPMS and blank/restore the panel on transitions.
+
+    Also holds a logind shutdown delay lock so restart/poweroff waits for
+    brightness 0 before the session is torn down; logout is covered by the
+    p13-panel-off.service ExecStop.
+    """
     stop = threading.Event()
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         signal.signal(signal.SIGINT, lambda *_: stop.set())
 
+    inhibitor = ShutdownInhibitor(on_shutdown=_blank_for_shutdown)
+    inhibitor.start()
+
     print("Watching desktop display power (Ctrl+C to stop)...")
     asleep = False
-    while not stop.is_set():
-        state = physical_dpms_asleep()
-        if state is not None and state != asleep:
-            asleep = state
-            _sync_panel(asleep)
-        stop.wait(interval)
+    try:
+        while not stop.is_set():
+            state = physical_dpms_asleep()
+            if state is not None and state != asleep:
+                asleep = state
+                _sync_panel(asleep)
+            stop.wait(interval)
+    finally:
+        inhibitor.stop()
     return 0
