@@ -43,7 +43,7 @@ def _parse_color(value) -> tuple[int, int, int] | None:
     if len(text) != 6:
         return None
     try:
-        return tuple(int(text[i : i + 2], 16) for i in (0, 2, 4))
+        return (int(text[0:2], 16), int(text[2:4], 16), int(text[4:6], 16))
     except ValueError:
         return None
 

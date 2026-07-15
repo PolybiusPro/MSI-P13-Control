@@ -37,7 +37,8 @@ DEFAULT_MODE = MODE_EXTENDED
 def get_saved_mode() -> dict[str, Any]:
     """Return ``{"name": str, "image": str | None, "style": int}`` from saved config."""
     config = load_display_config() or {}
-    raw = config.get("mode") if isinstance(config.get("mode"), dict) else {}
+    raw_mode = config.get("mode")
+    raw = raw_mode if isinstance(raw_mode, dict) else {}
     name = str(raw.get("name") or DEFAULT_MODE)
     if name not in VALID_MODES:
         name = DEFAULT_MODE

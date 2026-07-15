@@ -7,6 +7,7 @@ import io
 import logging
 import select
 import time
+from typing import cast
 
 import usb.core
 from PIL import Image
@@ -117,7 +118,9 @@ class EvdiBridge:
         img = Image.frombuffer(
             "RGB",
             (PANEL_WIDTH, PANEL_HEIGHT),
-            self._buf,
+            # ctypes arrays satisfy the buffer protocol Pillow reads from,
+            # but its stubs only admit bytes.
+            cast(bytes, self._buf),
             "raw",
             "BGRX",
             STRIDE,

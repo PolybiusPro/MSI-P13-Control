@@ -159,7 +159,7 @@ def _grab_portal() -> Image.Image | None:
         _LOGGER.debug("portal screenshot denied (code %s)", result.get("code"))
         return None
     results = result.get("results")
-    if not results or "uri" not in results:
+    if not isinstance(results, dict) or "uri" not in results:
         _LOGGER.debug("portal screenshot returned no URI")
         return None
     path = _uri_to_path(str(results["uri"]))

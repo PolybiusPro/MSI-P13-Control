@@ -222,7 +222,9 @@ class MainWindow(QMainWindow):
             check.setProperty("key", stat["key"])
             check.setChecked(True)
             check.toggled.connect(self._on_sysmon_opts_changed)
-            group.layout().addWidget(check)
+            group_layout = group.layout()
+            assert group_layout is not None
+            group_layout.addWidget(check)
             self._stat_checks.append(check)
         tabs.addTab(metrics, "Metrics")
         tabs.addTab(self._build_colors_tab(tabs), "Colors")
