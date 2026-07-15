@@ -20,7 +20,7 @@ from .layout import (
     is_physical_output,
     restore_saved_brightness,
 )
-from .mode import MODE_EXTENDED, MODE_OFF, get_saved_mode
+from .mode import MODE_EXTENDED, MODE_OFF, get_saved_mode, send_black_image
 from .shutdown_inhibit import ShutdownInhibitor
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,7 +68,7 @@ def _sync_panel(asleep: bool) -> None:
 
 def _blank_for_shutdown() -> None:
     try:
-        blank_panel_off()
+        send_black_image()
     except DisplayError as exc:
         _LOGGER.warning("could not blank panel for shutdown: %s", exc)
 
@@ -76,7 +76,7 @@ def run_sleep_watch(*, interval: float = 10.0) -> int:
     """Poll desktop DPMS and blank/restore the panel on transitions.
 
     Also holds a logind shutdown delay lock so restart/poweroff waits for
-    brightness 0 before the session is torn down; logout is covered by the
+    a black frame before the session is torn down; logout is covered by the
     p13-panel-off.service ExecStop.
     """
     stop = threading.Event()

@@ -18,6 +18,7 @@ from .layout import (
     restore_saved_brightness,
     save_display_config,
 )
+from .service import stop_display_service
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -139,6 +140,13 @@ def _stream() -> dict[str, int]:
         quality=None,
         rotate=None,
     )
+
+def send_black_image() -> None:
+    """Send a solid black frame without changing the saved mode or brightness."""
+    stop_display_service()
+    stream = _stream()
+    with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
+        disp.send_image(Image.new("RGB", PANEL_SIZE, (0, 0, 0)))
 
 def run_saved_display_mode() -> int:
     """Apply the saved Display Mode (used at login by p13-display.service).

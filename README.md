@@ -41,7 +41,7 @@ p13ctl display desktop
 p13ctl-gui
 ```
 
-`install.sh` installs EVDI, system dependencies, udev access rules, and `p13ctl` into a local virtualenv. `p13-display.service` starts the saved **Display Mode** at graphical login, while `p13-panel-off.service` sends HID brightness 0 during logout, shutdown, or restart. For shutdown and restart it holds a systemd-logind delay lock (the same mechanism desktop apps use for pre-shutdown cleanup), so the machine waits until the panel is off.
+`install.sh` installs EVDI, system dependencies, udev access rules, and `p13ctl` into a local virtualenv. `p13-display.service` starts the saved **Display Mode** at graphical login, while `p13-panel-off.service` sends a solid black image during logout, shutdown, or restart. For shutdown and restart it holds a systemd-logind delay lock (the same mechanism desktop apps use for pre-shutdown cleanup), so the machine waits until the panel is blank.
 
 ```bash
 ./install.sh --no-boot-display   # skip login autostart

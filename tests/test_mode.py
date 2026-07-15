@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from PIL import Image
+
 from p13ctl.display import mode
 
 def test_saved_system_monitor_style_is_validated(monkeypatch) -> None:
@@ -47,3 +49,35 @@ def test_dashboard_ignores_saved_metric_selection(monkeypatch) -> None:
     )
 
     assert mode.get_saved_mode()["items"] is None
+
+def test_send_black_image_uses_saved_rotation(monkeypatch) -> None:
+    sent: list[Image.Image] = []
+    stopped: list[bool] = []
+    monkeypatch.setattr(mode, "stop_display_service", lambda: stopped.append(True))
+    monkeypatch.setattr(
+        mode,
+        "_stream",
+        lambda: {"fps": 60, "quality": 75, "rotate": 270},
+    )
+
+    class FakeDisplay:
+        def __init__(self, *, rotate: int) -> None:
+            assert rotate == 270
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def send_image(self, image: Image.Image) -> None:
+            sent.append(image)
+
+    monkeypatch.setattr(mode, "ArtinchipDisplay", FakeDisplay)
+
+    mode.send_black_image()
+
+    assert stopped == [True]
+    assert len(sent) == 1
+    assert sent[0].size == mode.PANEL_SIZE
+    assert sent[0].getextrema() == ((0, 0), (0, 0), (0, 0))

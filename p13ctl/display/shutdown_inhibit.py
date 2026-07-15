@@ -174,4 +174,4 @@ class ShutdownInhibitor:
         with self._fd_lock:
             self._fd = os.dup(fd.value)  # reply message owns the original fd
         lib.sd_bus_message_unref(reply)
-        _LOGGER.info("holding shutdown delay lock (released after brightness 0)")
+        _LOGGER.info("holding shutdown delay lock (released after panel blanking)")

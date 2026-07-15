@@ -71,6 +71,17 @@ def cmd_display_image(args: argparse.Namespace) -> int:
         print(f"Display error: {exc}", file=sys.stderr)
         return 1
 
+def cmd_display_off(_args: argparse.Namespace) -> int:
+    from p13ctl.display.mode import send_black_image
+
+    try:
+        send_black_image()
+        print("Display off.")
+        return 0
+    except DisplayError as exc:
+        print(f"Display error: {exc}", file=sys.stderr)
+        return 1
+
 def cmd_display_desktop(args: argparse.Namespace) -> int:
     stream = _stream_settings(args)
     if getattr(args, "capture", False):
@@ -291,6 +302,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_di.add_argument("path")
     p_di.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
     p_di.set_defaults(func=cmd_display_image)
+    p_off = disp_sub.add_parser(
+        "off",
+        help="Turn the display off with a solid black image",
+    )
+    p_off.set_defaults(func=cmd_display_off)
     p_dd = disp_sub.add_parser(
         "desktop",
         help="Use the P13 as an EVDI extended monitor",
