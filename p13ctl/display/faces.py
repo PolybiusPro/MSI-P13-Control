@@ -28,6 +28,7 @@ _LOGGER = logging.getLogger(__name__)
 
 SIZE = 480
 CLOCK_STYLES = (1, 2, 3, 4, 5, 6)
+HW_MONITOR_STYLES = (1, 2, 3, 4)
 
 _TRACK = (38, 43, 56)
 
@@ -441,8 +442,11 @@ def render_stat(
     item: dict,
     background: Image.Image | None = None,
     palette: dict | None = None,
+    style: int = 1,
 ) -> Image.Image:
-    """One rotating hardware monitor card: ring gauge, title, big value, unit."""
+    """Render one of the four hardware monitor visual families."""
+    if style not in HW_MONITOR_STYLES:
+        raise DisplayError(f"system monitor style must be 1-4 (got {style})")
     pal = palette or _DEFAULT_PALETTE
     if background is not None:
         img = background.copy()
@@ -451,15 +455,61 @@ def render_stat(
         img = Image.new("RGB", (SIZE, SIZE), pal["background"])
         stroke = 0
     draw = ImageDraw.Draw(img)
-    ring = (26, 26, SIZE - 26, SIZE - 26)
-    draw.arc(ring, 0, 360, fill=_TRACK, width=14)
     fraction = item.get("fraction")
-    if fraction is not None:
-        sweep = max(0.0, min(1.0, fraction)) * 360
-        draw.arc(ring, -90, -90 + sweep, fill=pal["accent"], width=14)
-    _text_centered(draw, 108, item["title"], 42, pal["label"], stroke=stroke)
-    _text_centered(draw, 168, item["value"], 132, pal["text"], stroke=stroke)
-    _text_centered(draw, 322, item["unit"], 46, pal["accent"], stroke=stroke)
+    progress = max(0.0, min(1.0, fraction)) if fraction is not None else None
+
+    if style == 1:
+        ring = (26, 26, SIZE - 26, SIZE - 26)
+        draw.arc(ring, 0, 360, fill=_TRACK, width=14)
+        if progress is not None:
+            draw.arc(ring, -90, -90 + progress * 360, fill=pal["accent"], width=14)
+        _text_centered(draw, 108, item["title"], 42, pal["label"], stroke=stroke)
+        _text_centered(draw, 168, item["value"], 132, pal["text"], stroke=stroke)
+        _text_centered(draw, 322, item["unit"], 46, pal["accent"], stroke=stroke)
+    elif style == 2:
+        # Twin rails and corner cuts echo the second Windows asset family.
+        draw.line((42, 70, 42, 410), fill=_TRACK, width=8)
+        draw.line((438, 70, 438, 410), fill=_TRACK, width=8)
+        draw.line((42, 70, 112, 70), fill=pal["accent"], width=8)
+        draw.line((368, 410, 438, 410), fill=pal["accent"], width=8)
+        if progress is not None:
+            top = 410 - round(340 * progress)
+            draw.line((42, top, 42, 410), fill=pal["accent"], width=8)
+            draw.line((438, 70, 438, 70 + round(340 * progress)), fill=pal["accent"], width=8)
+        _text_centered(draw, 100, item["title"], 38, pal["accent"], stroke=stroke)
+        _text_centered(draw, 174, item["value"], 126, pal["text"], stroke=stroke)
+        _text_centered(draw, 326, item["unit"], 40, pal["label"], stroke=stroke)
+    elif style == 3:
+        # Broad instrument arc, with ticks kept visible even for RPM/clock data.
+        gauge = (48, 92, 432, 476)
+        draw.arc(gauge, 195, 345, fill=_TRACK, width=18)
+        for degree in range(195, 346, 15):
+            angle = math.radians(degree)
+            x1 = 240 + math.cos(angle) * 181
+            y1 = 284 + math.sin(angle) * 181
+            x2 = 240 + math.cos(angle) * 166
+            y2 = 284 + math.sin(angle) * 166
+            draw.line((x1, y1, x2, y2), fill=pal["label"], width=4)
+        if progress is not None:
+            draw.arc(gauge, 195, 195 + progress * 150, fill=pal["accent"], width=18)
+        _text_centered(draw, 52, item["title"], 40, pal["label"], stroke=stroke)
+        _text_centered(draw, 158, item["value"], 126, pal["text"], stroke=stroke)
+        _text_centered(draw, 306, item["unit"], 42, pal["accent"], stroke=stroke)
+    else:
+        # The fourth family is deliberately sparse: strong typography and a
+        # low horizontal meter instead of a surrounding gauge.
+        draw.rounded_rectangle((44, 64, 436, 416), radius=24, outline=_TRACK, width=4)
+        draw.rectangle((44, 64, 54, 174), fill=pal["accent"])
+        _text_centered(draw, 100, item["title"], 38, pal["label"], stroke=stroke)
+        _text_centered(draw, 172, item["value"], 132, pal["text"], stroke=stroke)
+        _text_centered(draw, 326, item["unit"], 40, pal["accent"], stroke=stroke)
+        draw.rounded_rectangle((76, 382, 404, 396), radius=7, fill=_TRACK)
+        if progress is not None and progress > 0:
+            draw.rounded_rectangle(
+                (76, 382, 76 + max(14, round(328 * progress)), 396),
+                radius=7,
+                fill=pal["accent"],
+            )
     return img
 
 def render_clock(
@@ -509,6 +559,7 @@ def render_clock(
 def run_hwmon(
     disp,
     *,
+    style: int = 1,
     refresh_s: float = 1.0,
     switch_s: float = 10.0,
     items: list[str] | None = None,
@@ -523,6 +574,8 @@ def run_hwmon(
     the stat overlay composited per frame. ``colors`` overrides the palette
     (hex strings keyed accent/text/label/background).
     """
+    if style not in HW_MONITOR_STYLES:
+        raise DisplayError(f"system monitor style must be 1-4 (got {style})")
     sensors = HwSensors()
     palette = resolve_palette(colors)
     base = open_background(background)
@@ -567,7 +620,7 @@ def run_hwmon(
                 index += 1
                 next_switch = t0 + switch_s
             frame = animated.frame() if animated else static
-            disp.send_image(render_stat(stats[index % len(stats)], frame, palette))
+            disp.send_image(render_stat(stats[index % len(stats)], frame, palette, style))
             if isinstance(animated, _AnimatedImageBackground):
                 # Align the next send to the animation's own frame boundary
                 # so frames are neither doubled nor skipped (no judder).

@@ -119,6 +119,7 @@ def cmd_sysmon(args: argparse.Namespace) -> int:
             print("Running system monitor (Ctrl+C to stop)...")
             items = [i.strip() for i in args.items.split(",") if i.strip()] if args.items else None
             disp.run_sysmon(
+                style=args.style,
                 interval=args.interval,
                 switch=args.switch,
                 items=items,
@@ -336,6 +337,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dm.set_defaults(func=cmd_display_monitor)
 
     p_sm = sub.add_parser("sysmon", help="Hardware monitor loop (rotating stats)")
+    p_sm.add_argument("--style", type=int, default=1, choices=range(1, 5))
     p_sm.add_argument("--interval", type=float, default=1.0, help="value refresh seconds")
     p_sm.add_argument("--switch", type=float, default=10.0, help="seconds per stat")
     p_sm.add_argument(

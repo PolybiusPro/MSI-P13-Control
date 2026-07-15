@@ -190,6 +190,15 @@ class MainWindow(QMainWindow):
         self._sysmon_opts = QWidget(box)
         opts = QVBoxLayout(self._sysmon_opts)
         opts.setContentsMargins(0, 0, 0, 0)
+        style_row = QHBoxLayout()
+        style_row.addWidget(QLabel("Style", self._sysmon_opts))
+        self._sysmon_style_combo = QComboBox(self._sysmon_opts)
+        for style in range(1, 5):
+            self._sysmon_style_combo.addItem(f"Style {style}", style)
+        self._sysmon_style_combo.currentIndexChanged.connect(self._on_sysmon_opts_changed)
+        style_row.addWidget(self._sysmon_style_combo)
+        style_row.addStretch()
+        opts.addLayout(style_row)
         row = QHBoxLayout()
         row.addWidget(QLabel("Switch every", self._sysmon_opts))
         self._switch_combo = QComboBox(self._sysmon_opts)
@@ -437,7 +446,7 @@ class MainWindow(QMainWindow):
         elif mode == MODE_SYSMON and (
             self._service_display_mode() == MODE_SYSMON or self._worker_alive(self._sysmon_worker)
         ):
-            text = "System monitor running"
+            text = f"System monitor running (style {self._selected_sysmon_style()})"
         elif mode == MODE_CLOCK and (
             self._service_display_mode() == MODE_CLOCK or self._worker_alive(self._sysmon_worker)
         ):
@@ -513,6 +522,9 @@ class MainWindow(QMainWindow):
     def _selected_switch(self) -> int:
         return int(self._switch_combo.currentData())
 
+    def _selected_sysmon_style(self) -> int:
+        return int(self._sysmon_style_combo.currentData())
+
     def _on_sysmon_opts_changed(self, *_args) -> None:
         if self._updating_sysmon or self._closing:
             return
@@ -521,11 +533,19 @@ class MainWindow(QMainWindow):
     def _apply_sysmon_opts(self) -> None:
         if self._closing or self._active_mode != MODE_SYSMON:
             return
-        self._persist_mode(MODE_SYSMON, switch=self._selected_switch(), items=self._checked_stat_keys())
+        self._persist_mode(
+            MODE_SYSMON,
+            monitor_style=self._selected_sysmon_style(),
+            switch=self._selected_switch(),
+            items=self._checked_stat_keys(),
+        )
         self._apply_mode(MODE_SYSMON)
 
     def _load_saved_sysmon(self, saved: dict) -> None:
         self._updating_sysmon = True
+        style_index = self._sysmon_style_combo.findData(int(saved.get("monitor_style") or 1))
+        if style_index >= 0:
+            self._sysmon_style_combo.setCurrentIndex(style_index)
         index = self._switch_combo.findData(int(saved.get("switch") or 10))
         if index >= 0:
             self._switch_combo.setCurrentIndex(index)
@@ -661,6 +681,7 @@ class MainWindow(QMainWindow):
         *,
         image: str | None = None,
         style: int | None = None,
+        monitor_style: int | None = None,
         switch: int | None = None,
         items: list[str] | None = None,
         background: str | None = None,
@@ -671,6 +692,7 @@ class MainWindow(QMainWindow):
                 name=name,
                 image=image,
                 style=style,
+                monitor_style=monitor_style,
                 switch=switch,
                 items=items,
                 background=background,
@@ -735,6 +757,7 @@ class MainWindow(QMainWindow):
             mode,
             image=self._image_path if mode == MODE_IMAGE else None,
             style=self._selected_clock_style() if mode == MODE_CLOCK else None,
+            monitor_style=self._selected_sysmon_style() if mode == MODE_SYSMON else None,
             switch=self._selected_switch() if mode == MODE_SYSMON else None,
             items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
             background=(self._face_background or "") if mode in (MODE_SYSMON, MODE_CLOCK) else None,
@@ -953,6 +976,7 @@ class MainWindow(QMainWindow):
             self._persist_mode(
                 mode,
                 style=self._selected_clock_style() if mode == MODE_CLOCK else None,
+                monitor_style=self._selected_sysmon_style() if mode == MODE_SYSMON else None,
                 switch=self._selected_switch() if mode == MODE_SYSMON else None,
                 items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
                 background=(self._face_background or "") if mode in (MODE_SYSMON, MODE_CLOCK) else None,
@@ -970,7 +994,11 @@ class MainWindow(QMainWindow):
         self._sysmon_worker = FaceWorker(
             rotate=stream["rotate"],
             face=face,
-            style=self._selected_clock_style(),
+            style=(
+                self._selected_clock_style()
+                if face == "clock"
+                else self._selected_sysmon_style()
+            ),
             switch=float(self._selected_switch()),
             items=self._checked_stat_keys() or None,
             background=self._face_background,

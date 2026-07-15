@@ -300,6 +300,7 @@ class ArtinchipDisplay:
         self,
         interval: float = 1.0,
         *,
+        style: int = 1,
         switch: float = 10.0,
         items: list[str] | None = None,
         background: str | None = None,
@@ -310,6 +311,7 @@ class ArtinchipDisplay:
 
         run_hwmon(
             self,
+            style=style,
             refresh_s=interval,
             switch_s=switch,
             items=items,

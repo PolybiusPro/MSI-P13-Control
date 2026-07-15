@@ -133,6 +133,7 @@ class FaceWorker(QThread):
                     )
                 else:
                     disp.run_sysmon(
+                        style=self.style,
                         interval=self.interval,
                         switch=self.switch,
                         items=self.items,

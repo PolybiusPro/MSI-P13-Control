@@ -35,7 +35,7 @@ PANEL_SIZE = (480, 480)
 DEFAULT_MODE = MODE_EXTENDED
 
 def get_saved_mode() -> dict[str, Any]:
-    """Return ``{"name": str, "image": str | None, "style": int}`` from saved config."""
+    """Return the validated saved display mode and its face options."""
     config = load_display_config() or {}
     raw_mode = config.get("mode")
     raw = raw_mode if isinstance(raw_mode, dict) else {}
@@ -53,6 +53,12 @@ def get_saved_mode() -> dict[str, Any]:
         style = 1
     if style not in range(1, 7):
         style = 1
+    try:
+        monitor_style = int(raw.get("monitor_style") or 1)
+    except (TypeError, ValueError):
+        monitor_style = 1
+    if monitor_style not in range(1, 5):
+        monitor_style = 1
     try:
         switch = int(raw.get("switch") or 10)
     except (TypeError, ValueError):
@@ -75,6 +81,7 @@ def get_saved_mode() -> dict[str, Any]:
         "name": name,
         "image": image_path,
         "style": style,
+        "monitor_style": monitor_style,
         "switch": switch,
         "items": items,
         "background": background_path,
@@ -86,6 +93,7 @@ def update_saved_mode(
     name: str,
     image: str | None = None,
     style: int | None = None,
+    monitor_style: int | None = None,
     switch: int | None = None,
     items: list[str] | None = None,
     background: str | None = None,
@@ -106,6 +114,9 @@ def update_saved_mode(
     if name == MODE_CLOCK:
         mode["style"] = style if style is not None else existing["style"]
     if name == MODE_SYSMON:
+        mode["monitor_style"] = (
+            monitor_style if monitor_style is not None else existing["monitor_style"]
+        )
         mode["switch"] = switch if switch is not None else existing["switch"]
         selected = items if items is not None else existing["items"]
         if selected:
@@ -182,6 +193,7 @@ def run_saved_display_mode() -> int:
                     signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
                 print("System monitor running (Ctrl+C to stop)...")
                 disp.run_sysmon(
+                    style=saved["monitor_style"],
                     switch=saved["switch"],
                     items=saved["items"],
                     background=saved["background"],
