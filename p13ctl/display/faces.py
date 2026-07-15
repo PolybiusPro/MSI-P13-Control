@@ -325,7 +325,13 @@ def _fit_panel(img: Image.Image) -> Image.Image:
     return img.crop((left, top, left + SIZE, top + SIZE))
 
 class _VideoBackground:
-    """Loop a video as panel frames via an ffmpeg rawvideo pipe."""
+    """Loop a video as panel frames via ffmpeg rawvideo pipes.
+
+    ffmpeg's ``-stream_loop`` freezes the last frame for seconds at each
+    restart on ordinary H.264 MP4s (edit-list/B-frame mishandling), so
+    each pass instead plays to EOF and a pre-spawned standby process takes
+    over, keeping the loop transition to a single frame boundary.
+    """
 
     _FRAME_BYTES = SIZE * SIZE * 3
 
@@ -333,16 +339,16 @@ class _VideoBackground:
         self.path = path
         self.fps = fps
         self._proc: subprocess.Popen | None = None
+        self._standby: subprocess.Popen | None = None
 
-    def start(self) -> None:
+    def _spawn(self) -> subprocess.Popen:
         ffmpeg = shutil.which("ffmpeg")
         if ffmpeg is None:
             raise DisplayError("video backgrounds require ffmpeg (dnf install ffmpeg)")
-        self._proc = subprocess.Popen(
+        return subprocess.Popen(
             [
                 ffmpeg,
                 "-loglevel", "quiet",
-                "-stream_loop", "-1",
                 "-i", self.path,
                 "-vf", f"scale={SIZE}:{SIZE}:force_original_aspect_ratio=increase,crop={SIZE}:{SIZE}",
                 "-r", str(self.fps),
@@ -355,23 +361,32 @@ class _VideoBackground:
             stderr=subprocess.DEVNULL,
         )
 
+    def start(self) -> None:
+        self._proc = self._spawn()
+        self._standby = self._spawn()
+
     def frame(self) -> Image.Image:
         for _attempt in (0, 1):
-            if self._proc is None or self._proc.poll() is not None:
-                self.stop()
+            if self._proc is None or self._standby is None:
                 self.start()
             assert self._proc is not None and self._proc.stdout is not None
             data = self._proc.stdout.read(self._FRAME_BYTES)
-            if data is not None and len(data) == self._FRAME_BYTES:
+            if len(data) == self._FRAME_BYTES:
                 return Image.frombytes("RGB", (SIZE, SIZE), data)
-            self.stop()  # decoder ended (e.g. formats -stream_loop can't loop)
+            # EOF: promote the standby decoder (its first frame is already
+            # buffered) and spawn its replacement.
+            self._proc.kill()
+            self._proc.wait()
+            self._proc, self._standby = self._standby, self._spawn()
         raise DisplayError(f"could not decode video background: {self.path}")
 
     def stop(self) -> None:
-        if self._proc is not None:
-            self._proc.kill()
-            self._proc.wait()
-            self._proc = None
+        for proc in (self._proc, self._standby):
+            if proc is not None:
+                proc.kill()
+                proc.wait()
+        self._proc = None
+        self._standby = None
 
 class _AnimatedImageBackground:
     """Loop an animated image (WebP/GIF/APNG) decoded via PIL.
