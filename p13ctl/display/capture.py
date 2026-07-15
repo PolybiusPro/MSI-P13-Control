@@ -203,7 +203,8 @@ def _grab_wayland() -> Image.Image:
 
     raise DisplayError(
         "Wayland screen capture failed (--capture fallback).\n"
-        "Install a userspace screenshot backend: spectacle (KDE), "
+        "Prefer the default extended monitor: p13ctl display desktop\n"
+        "For capture mode install spectacle (KDE), "
         "gnome-screenshot (GNOME), or grim (wlroots).\n"
         f"Tried: {', '.join(tried)}"
     )

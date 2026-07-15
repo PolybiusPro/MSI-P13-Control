@@ -7,7 +7,7 @@ LINUX="$ROOT/tools/linux"
 VENV="$ROOT/.venv"
 
 DO_SYSTEM_DEPS=1
-DO_EVDI=0
+DO_EVDI=1
 DO_UDEV=1
 DO_PYTHON=1
 DO_BLACKLIST=0
@@ -24,11 +24,11 @@ usage() {
   cat <<EOF
 Usage: $0 [options]
 
-Install p13ctl, system dependencies, udev rules, and user-session services.
+Install p13ctl, EVDI extended-monitor support, udev rules, and user services.
 
 Options:
-  --evdi-only       Legacy: install the optional EVDI kernel backend
-  --no-evdi         Accepted for compatibility (EVDI is disabled by default)
+  --evdi-only       Install only EVDI (kernel module, boot load, libevdi)
+  --no-evdi         Skip EVDI (extended monitor mode will be unavailable)
   --no-system-deps  Skip apt/dnf/pacman packages
   --no-udev         Skip udev rules
   --no-python       Skip virtualenv and pip install
@@ -200,6 +200,15 @@ disable_displaylink_service() {
   fi
 }
 
+install_evdi_boot_config() {
+  echo "==> Configuring EVDI boot load"
+  run_root cp "$LINUX/evdi-modules-load.conf" /etc/modules-load.d/evdi-p13.conf
+  run_root cp "$LINUX/evdi-p13.service" /etc/systemd/system/evdi-p13.service
+  run_root systemctl daemon-reload
+  run_root systemctl enable dkms.service 2>/dev/null || true
+  run_root systemctl enable evdi-p13.service
+}
+
 remove_conflicting_evdi_configs() {
   run_root rm -f /etc/modprobe.d/evdi.conf /etc/modules-load.d/evdi.conf
 }
@@ -300,9 +309,10 @@ Enroll the DKMS signing key, then reboot:
 
 In the blue MOK Manager screen: Enroll MOK → Continue → Yes → enter password → Reboot.
 
-After reboot, rerun this legacy EVDI-only install if you still need it.
+After reboot, dkms.service builds EVDI and evdi-p13.service loads it.
 
 SB
+      install_evdi_boot_config
       return 0
     fi
     die "DKMS build for evdi failed — check: dkms status; journalctl -u dkms -b"
@@ -317,8 +327,9 @@ SB
   fi
 
   disable_displaylink_service
+  install_evdi_boot_config
   link_libevdi
-  echo "    EVDI installed for this session; no boot-time loader was configured"
+  echo "    EVDI rebuilds through DKMS and loads before the display manager"
 }
 
 install_udev() {
@@ -475,6 +486,7 @@ Try:
   p13ctl sysmon
 
 Login: p13-display.service applies the saved Display Mode in the user session.
+Extended monitor mode uses EVDI; add --capture to mirror an existing display instead.
 Logout/restart: p13-panel-off.service sends brightness 0 before the session exits.
 
 Re-plug the P13 USB cable after udev rule install.

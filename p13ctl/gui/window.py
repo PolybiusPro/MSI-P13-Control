@@ -153,7 +153,7 @@ class MainWindow(QMainWindow):
 
         self._mode_combo = QComboBox(box)
         self._mode_combo.addItem("Off", MODE_OFF)
-        self._mode_combo.addItem("Desktop mirror", MODE_EXTENDED)
+        self._mode_combo.addItem("Extended monitor", MODE_EXTENDED)
         self._mode_combo.addItem("Test pattern", MODE_TEST)
         self._mode_combo.addItem("Image", MODE_IMAGE)
         self._mode_combo.addItem("System monitor", MODE_SYSMON)
@@ -442,7 +442,7 @@ class MainWindow(QMainWindow):
             return
         mode = self._active_mode or MODE_OFF
         if mode == MODE_EXTENDED and self._mirror_running():
-            text = "Desktop mirror running"
+            text = "Extended monitor running"
         elif mode == MODE_SYSMON and (
             self._service_display_mode() == MODE_SYSMON or self._worker_alive(self._sysmon_worker)
         ):
@@ -799,9 +799,9 @@ class MainWindow(QMainWindow):
                 start_mirror_service()
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not start desktop mirror", detail)
+                self._show_error("Could not start extended monitor", detail)
                 return False
-            self._status.showMessage("Desktop mirror started", 3000)
+            self._status.showMessage("Extended monitor started", 3000)
             return True
 
         stream = self._stream_values()
@@ -814,7 +814,7 @@ class MainWindow(QMainWindow):
         self._mirror_worker.error.connect(self._on_mirror_error)
         self._mirror_worker.stopped.connect(self._on_mirror_stopped)
         self._mirror_worker.start()
-        self._status.showMessage("Desktop mirror started", 3000)
+        self._status.showMessage("Extended monitor started", 3000)
         return True
 
     def _stop_extended(self, *, save_layout: bool) -> None:
@@ -825,7 +825,7 @@ class MainWindow(QMainWindow):
                 stop_mirror_service()
             except subprocess.CalledProcessError as exc:
                 detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not stop desktop mirror", detail)
+                self._show_error("Could not stop extended monitor", detail)
                 return
         elif self._worker_alive(self._mirror_worker):
             if save_layout and self._persist_layout_now():
@@ -838,7 +838,7 @@ class MainWindow(QMainWindow):
     def _on_mirror_error(self, msg: str) -> None:
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
-        self._show_error("Desktop mirror failed", msg)
+        self._show_error("Extended monitor failed", msg)
         self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
 

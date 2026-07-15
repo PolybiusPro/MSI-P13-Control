@@ -57,7 +57,10 @@ class EvdiBridge:
         self._dpms_asleep = False
 
     def setup_evdi(self) -> None:
-        version = evdi.get_lib_version()
+        try:
+            version = evdi.get_lib_version()
+        except RuntimeError as exc:
+            raise DisplayError(str(exc)) from exc
         _LOGGER.info("libevdi %d.%d.%d", *version)
 
         device_idx = -1

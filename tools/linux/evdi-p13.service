@@ -1,0 +1,14 @@
+[Unit]
+Description=Load EVDI module after DKMS autoinstall
+Documentation=man:dkms(8)
+After=dkms.service
+Before=display-manager.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+# modules-load.d runs before dkms.service; modprobe here after DKMS builds evdi.
+ExecStart=/usr/sbin/modprobe evdi initial_device_count=1
+
+[Install]
+WantedBy=multi-user.target

@@ -8,7 +8,7 @@ CONFIG_DIR="${HOME}/.config/p13ctl"
 
 DO_PYTHON=1
 DO_UDEV=1
-DO_EVDI=0
+DO_EVDI=1
 DO_CONFIG=0
 DO_BLACKLIST=0
 DO_PACKAGES=0
@@ -29,8 +29,8 @@ Options:
   --remove-config     Delete ~/.config/p13ctl
   --remove-blacklist  Delete /etc/modprobe.d/blacklist-aic-usb-display.conf
   --remove-packages   Uninstall displaylink/evdi-dkms packages (dnf/apt)
-  --remove-evdi       Remove legacy EVDI kernel module and boot config
-  --keep-evdi         Compatibility option; EVDI is kept by default
+  --remove-evdi       Explicitly remove EVDI (also the default)
+  --keep-evdi         Leave EVDI kernel module and boot config in place
   --keep-udev         Leave udev rules in place
   --keep-python       Leave .venv in place
   --keep-boot-display Leave p13-display.service user unit in place
@@ -196,12 +196,12 @@ remove_gui_desktop() {
 
 if [[ "$DO_EVDI" == "1" ]]; then
   unload_evdi
-  remove_evdi_dkms
   remove_evdi_configs
   remove_libevdi_link
 fi
 
 if [[ "$DO_PACKAGES" == "1" ]]; then
+  remove_evdi_dkms
   remove_evdi_packages
 fi
 
@@ -236,7 +236,7 @@ Uninstall complete.
 Removed:
   - p13ctl virtualenv (unless --keep-python)
   - udev rules (unless --keep-udev)
-$( [[ "$DO_EVDI" == "1" ]] && echo "  - legacy EVDI module/config" )
+$( [[ "$DO_EVDI" == "1" ]] && echo "  - EVDI module/config" )
 $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )

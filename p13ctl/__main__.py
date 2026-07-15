@@ -73,18 +73,41 @@ def cmd_display_image(args: argparse.Namespace) -> int:
 
 def cmd_display_desktop(args: argparse.Namespace) -> int:
     stream = _stream_settings(args)
-    interval = args.interval
-    if interval is None:
-        interval = 1.0 / max(1, stream["fps"])
+    if getattr(args, "capture", False):
+        interval = args.interval
+        if interval is None:
+            interval = 1.0 / max(1, stream["fps"])
+        try:
+            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
+                print("Mirroring desktop via userspace screen capture (Ctrl+C to stop)...")
+                disp.run_desktop(
+                    interval=interval,
+                    monitor=args.monitor,
+                    crop=args.crop,
+                    quality=stream["quality"],
+                )
+        except KeyboardInterrupt:
+            print()
+            return 0
+        except DisplayError as exc:
+            print(f"Display error: {exc}", file=sys.stderr)
+            return 1
+        return 0
+
     try:
-        with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-            print("Mirroring desktop via userspace screen capture (Ctrl+C to stop)...")
-            disp.run_desktop(
-                interval=interval,
-                monitor=args.monitor,
-                crop=args.crop,
-                quality=stream["quality"],
-            )
+        from p13ctl.display.virtual_monitor import run_virtual_monitor
+
+        fps = stream["fps"]
+        if args.interval is not None:
+            fps = max(1, int(round(1.0 / args.interval)))
+        run_virtual_monitor(
+            fps=fps,
+            quality=stream["quality"],
+            rotate=stream["rotate"],
+            configure=not args.no_configure,
+            save_layout=not args.no_save_layout,
+            reset_layout=args.reset_layout,
+        )
     except KeyboardInterrupt:
         print()
         return 0
@@ -109,7 +132,7 @@ def cmd_display_sleepwatch(args: argparse.Namespace) -> int:
     return run_sleep_watch(interval=args.interval)
 
 def cmd_display_monitor(args: argparse.Namespace) -> int:
-    """Alias for the userspace desktop mirror."""
+    """Alias for the EVDI extended monitor."""
     return cmd_display_desktop(args)
 
 def cmd_sysmon(args: argparse.Namespace) -> int:
@@ -270,14 +293,14 @@ def build_parser() -> argparse.ArgumentParser:
     p_di.set_defaults(func=cmd_display_image)
     p_dd = disp_sub.add_parser(
         "desktop",
-        help="Mirror desktop to the P13 with userspace screen capture",
+        help="Use the P13 as an EVDI extended monitor",
     )
     p_dd.add_argument("--fps", type=int, default=None, help="target frame rate (default: from saved config or 60)")
     p_dd.add_argument(
         "--interval",
         type=float,
         default=None,
-        help="alias for 1/fps (capture mode only)",
+        help="alias for 1/fps",
     )
     p_dd.add_argument("--quality", type=int, default=None, help="JPEG quality 1-95 (default: from saved config or 75)")
     p_dd.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270], help="software image rotation")
@@ -299,7 +322,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dd.add_argument(
         "--capture",
         action="store_true",
-        help="deprecated compatibility option (screen capture is now always used)",
+        help="mirror an existing display instead of creating an extended monitor",
     )
     p_dd.add_argument("--monitor", type=int, default=0, help="capture mode: monitor index")
     p_dd.add_argument(
@@ -322,7 +345,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_sw.set_defaults(func=cmd_display_sleepwatch)
     p_dm = disp_sub.add_parser(
         "monitor",
-        help="Alias for the userspace desktop mirror",
+        help="Alias for the EVDI extended monitor",
     )
     p_dm.add_argument("--fps", type=int, default=None)
     p_dm.add_argument("--quality", type=int, default=None)

@@ -1,4 +1,7 @@
-"""Blank the panel while the desktop displays sleep."""
+"""Blank the panel while desktop displays sleep in non-extended modes.
+
+Extended mode receives DPMS events directly through EVDI.
+"""
 
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ from .layout import (
     is_physical_output,
     restore_saved_brightness,
 )
-from .mode import MODE_OFF, get_saved_mode
+from .mode import MODE_EXTENDED, MODE_OFF, get_saved_mode
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -50,8 +53,8 @@ def physical_dpms_asleep() -> bool | None:
 
 def _sync_panel(asleep: bool) -> None:
     mode = get_saved_mode()["name"]
-    if mode == MODE_OFF:
-        # The off mode must stay dark when the desktop wakes.
+    if mode in (MODE_EXTENDED, MODE_OFF):
+        # EVDI handles extended-mode DPMS; off must stay dark on wake.
         return
     _LOGGER.info("panel %s with desktop display power", "sleep" if asleep else "wake")
     try:
