@@ -57,7 +57,7 @@ def get_saved_mode() -> dict[str, Any]:
         monitor_style = int(raw.get("monitor_style") or 1)
     except (TypeError, ValueError):
         monitor_style = 1
-    if monitor_style not in range(1, 5):
+    if monitor_style not in range(1, 6):
         monitor_style = 1
     try:
         switch = int(raw.get("switch") or 10)
@@ -66,6 +66,8 @@ def get_saved_mode() -> dict[str, Any]:
     switch = max(1, min(120, switch))
     raw_items = raw.get("items")
     items = [str(i) for i in raw_items] if isinstance(raw_items, list) and raw_items else None
+    if monitor_style == 5:
+        items = None
     background = raw.get("background")
     background_path = str(background) if background else None
     if background_path and not Path(background_path).is_file():

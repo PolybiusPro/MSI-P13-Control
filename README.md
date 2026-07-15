@@ -10,7 +10,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | ------------------------------- | -------------------- | -------------------------------------------------------------- |
 | Extended monitor on LCD         | **Implemented**      | EVDI virtual monitor (`p13ctl display desktop`)                |
 | LCD custom image / test pattern | **Implemented**      | JPEG streaming via Artinchip USB protocol                      |
-| System monitor on LCD           | **Implemented**      | Four software-rendered styles (`p13ctl sysmon --style 1..4`)   |
+| System monitor on LCD           | **Implemented**      | Five software-rendered styles (`p13ctl sysmon --style 1..5`)   |
 | Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
 | Leave firmware splash (HID)     | **Implemented**      | Auto on display connect; or `p13ctl hid host on`               |
 | Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/` |
@@ -65,6 +65,10 @@ If the Artinchip kernel driver (`aic_usb_display`) conflicts with userspace acce
 See [docs/protocol-display.md](docs/protocol-display.md) for details.
 
 `p13ctl display desktop` creates a 480×480 extended monitor that can be arranged in your desktop settings. Use `p13ctl display desktop --capture` to mirror an existing screen without EVDI.
+
+System monitor style 5 is a five-metric dashboard with circular CPU/GPU gauges
+and RAM usage. Add a photo or looping video behind it with
+`p13ctl sysmon --style 5 --background /path/to/background.jpg`.
 ## Project layout
 
 ## License

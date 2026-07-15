@@ -306,7 +306,7 @@ class ArtinchipDisplay:
         background: str | None = None,
         colors: dict | None = None,
     ) -> None:
-        """Rotate through hardware stats like a hardware monitor."""
+        """Show live hardware stats on the panel."""
         from .faces import run_hwmon
 
         run_hwmon(

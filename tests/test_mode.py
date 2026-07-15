@@ -8,9 +8,9 @@ def test_saved_system_monitor_style_is_validated(monkeypatch) -> None:
     monkeypatch.setattr(
         mode,
         "load_display_config",
-        lambda: {"mode": {"name": mode.MODE_SYSMON, "monitor_style": 4}},
+        lambda: {"mode": {"name": mode.MODE_SYSMON, "monitor_style": 5}},
     )
-    assert mode.get_saved_mode()["monitor_style"] == 4
+    assert mode.get_saved_mode()["monitor_style"] == 5
 
     monkeypatch.setattr(
         mode,
@@ -32,3 +32,18 @@ def test_system_monitor_style_is_persisted(monkeypatch) -> None:
     mode.update_saved_mode(name=mode.MODE_SYSMON, monitor_style=3)
 
     assert saved["mode"]["monitor_style"] == 3
+
+def test_dashboard_ignores_saved_metric_selection(monkeypatch) -> None:
+    monkeypatch.setattr(
+        mode,
+        "load_display_config",
+        lambda: {
+            "mode": {
+                "name": mode.MODE_SYSMON,
+                "monitor_style": 5,
+                "items": ["cpu_temp"],
+            }
+        },
+    )
+
+    assert mode.get_saved_mode()["items"] is None

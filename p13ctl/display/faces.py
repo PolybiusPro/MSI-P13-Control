@@ -28,12 +28,13 @@ _LOGGER = logging.getLogger(__name__)
 
 SIZE = 480
 CLOCK_STYLES = (1, 2, 3, 4, 5, 6)
-HW_MONITOR_STYLES = (1, 2, 3, 4)
+HW_MONITOR_STYLES = (1, 2, 3, 4, 5)
 
 _TRACK = (38, 43, 56)
 
 DEFAULT_COLORS = {
     "accent": "#E8322F",
+    "track": "#262B38",
     "text": "#F0F2F8",
     "label": "#8A93A8",
     "background": "#0A0C12",
@@ -49,7 +50,7 @@ def _parse_color(value) -> tuple[int, int, int] | None:
         return None
 
 def resolve_palette(colors: dict | None) -> dict:
-    """Hex color overrides -> RGB palette (accent/text/label/background)."""
+    """Hex color overrides -> RGB face palette."""
     palette = {}
     for key, default in DEFAULT_COLORS.items():
         override = _parse_color((colors or {}).get(key))
@@ -65,6 +66,16 @@ _FONT_PATHS = (
 )
 _font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
 
+_DASHBOARD_FONT_PATHS = (
+    "/usr/share/fonts/google-roboto/Roboto-Bold.ttf",
+    "/usr/share/fonts/truetype/roboto/unhinted/RobotoTTF/Roboto-Bold.ttf",
+    "/usr/share/fonts/liberation-sans-fonts/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf",
+    "/usr/share/fonts/dejavu-sans-fonts/DejaVuSansCondensed-Bold.ttf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf",
+)
+_dashboard_font_cache: dict[int, ImageFont.FreeTypeFont | ImageFont.ImageFont] = {}
+
 def _font(size: int):
     if size not in _font_cache:
         for path in _FONT_PATHS:
@@ -74,6 +85,17 @@ def _font(size: int):
         else:
             _font_cache[size] = ImageFont.load_default(size)
     return _font_cache[size]
+
+def _dashboard_font(size: int):
+    """A tighter UI face that mirrors the reference dashboard typography."""
+    if size not in _dashboard_font_cache:
+        for path in _DASHBOARD_FONT_PATHS:
+            if Path(path).is_file():
+                _dashboard_font_cache[size] = ImageFont.truetype(path, size)
+                break
+        else:
+            _dashboard_font_cache[size] = _font(size)
+    return _dashboard_font_cache[size]
 
 def _text_centered(
     draw: ImageDraw.ImageDraw, y: int, text: str, size: int, fill, *, stroke: int = 0
@@ -472,9 +494,11 @@ def render_stat(
     palette: dict | None = None,
     style: int = 1,
 ) -> Image.Image:
-    """Render one of the four hardware monitor visual families."""
+    """Render one of the four single-stat hardware monitor families."""
     if style not in HW_MONITOR_STYLES:
-        raise DisplayError(f"system monitor style must be 1-4 (got {style})")
+        raise DisplayError(f"system monitor style must be 1-5 (got {style})")
+    if style == 5:
+        return render_dashboard([item], background, palette)
     pal = palette or _DEFAULT_PALETTE
     if background is not None:
         img = background.copy()
@@ -488,7 +512,7 @@ def render_stat(
 
     if style == 1:
         ring = (26, 26, SIZE - 26, SIZE - 26)
-        draw.arc(ring, 0, 360, fill=_TRACK, width=14)
+        draw.arc(ring, 0, 360, fill=pal["track"], width=14)
         if progress is not None:
             draw.arc(ring, -90, -90 + progress * 360, fill=pal["accent"], width=14)
         _text_centered(draw, 108, item["title"], 42, pal["label"], stroke=stroke)
@@ -496,8 +520,8 @@ def render_stat(
         _text_centered(draw, 322, item["unit"], 46, pal["accent"], stroke=stroke)
     elif style == 2:
         # Twin rails and corner cuts echo the second Windows asset family.
-        draw.line((42, 70, 42, 410), fill=_TRACK, width=8)
-        draw.line((438, 70, 438, 410), fill=_TRACK, width=8)
+        draw.line((42, 70, 42, 410), fill=pal["track"], width=8)
+        draw.line((438, 70, 438, 410), fill=pal["track"], width=8)
         draw.line((42, 70, 112, 70), fill=pal["accent"], width=8)
         draw.line((368, 410, 438, 410), fill=pal["accent"], width=8)
         if progress is not None:
@@ -510,7 +534,7 @@ def render_stat(
     elif style == 3:
         # Broad instrument arc, with ticks kept visible even for RPM/clock data.
         gauge = (48, 92, 432, 476)
-        draw.arc(gauge, 195, 345, fill=_TRACK, width=18)
+        draw.arc(gauge, 195, 345, fill=pal["track"], width=18)
         for degree in range(195, 346, 15):
             angle = math.radians(degree)
             x1 = 240 + math.cos(angle) * 181
@@ -531,13 +555,115 @@ def render_stat(
         _text_centered(draw, 100, item["title"], 38, pal["label"], stroke=stroke)
         _text_centered(draw, 172, item["value"], 132, pal["text"], stroke=stroke)
         _text_centered(draw, 326, item["unit"], 40, pal["accent"], stroke=stroke)
-        draw.rounded_rectangle((76, 382, 404, 396), radius=7, fill=_TRACK)
+        draw.rounded_rectangle((76, 382, 404, 396), radius=7, fill=pal["track"])
         if progress is not None and progress > 0:
             draw.rounded_rectangle(
                 (76, 382, 76 + max(14, round(328 * progress)), 396),
                 radius=7,
                 fill=pal["accent"],
             )
+    return img
+
+_DASHBOARD_METRICS = (
+    ("cpu_temp", "CPU Temp", "°C", 160, 101),
+    ("cpu_usage", "CPU Usage", "%", 320, 101),
+    ("gpu_temp", "GPU Temp", "°C", 160, 261),
+    ("gpu_usage", "GPU Usage", "%", 320, 261),
+)
+
+def _text_at_center(
+    draw: ImageDraw.ImageDraw,
+    center_x: int,
+    y: int,
+    text: str,
+    size: int,
+    fill,
+    *,
+    stroke: int = 0,
+) -> None:
+    font = _dashboard_font(size)
+    width = draw.textlength(text, font=font)
+    draw.text(
+        (center_x - width / 2, y),
+        text,
+        font=font,
+        fill=fill,
+        stroke_width=stroke,
+        stroke_fill=(0, 0, 0),
+    )
+
+def render_dashboard(
+    items: list[dict],
+    background: Image.Image | None = None,
+    palette: dict | None = None,
+) -> Image.Image:
+    """Render the compact five-metric circular dashboard used by style 5."""
+    pal = palette or _DEFAULT_PALETTE
+    if background is not None:
+        img = background.copy()
+        stroke = 2
+    else:
+        img = Image.new("RGB", (SIZE, SIZE), pal["background"])
+        stroke = 0
+    draw = ImageDraw.Draw(img)
+    by_key = {item.get("key"): item for item in items}
+
+    for key, label, fallback_unit, center_x, center_y in _DASHBOARD_METRICS:
+        item = by_key.get(key)
+        value = item.get("value", "--") if item else "--"
+        unit = item.get("unit", fallback_unit) if item else fallback_unit
+        fraction = item.get("fraction") if item else None
+        progress = (
+            max(0.0, min(1.0, fraction)) if fraction is not None else None
+        )
+        ring = (center_x - 51, center_y - 51, center_x + 51, center_y + 51)
+        draw.arc(ring, 0, 360, fill=pal["track"], width=5)
+        if progress is not None:
+            draw.arc(
+                ring,
+                -90,
+                -90 + progress * 360,
+                fill=pal["accent"],
+                width=5,
+            )
+        _text_at_center(
+            draw,
+            center_x,
+            center_y - 18,
+            f"{value}{unit}",
+            29,
+            pal["text"],
+            stroke=stroke,
+        )
+        _text_at_center(
+            draw,
+            center_x,
+            center_y + 61,
+            label,
+            26,
+            pal["label"],
+            stroke=stroke,
+        )
+
+    ram = by_key.get("ram_usage")
+    ram_value = ram.get("value", "--") if ram else "--"
+    ram_unit = ram.get("unit", "%") if ram else "%"
+    _text_at_center(draw, 240, 397, "RAM", 27, pal["label"], stroke=stroke)
+    _text_at_center(
+        draw, 240, 426, f"{ram_value}{ram_unit}", 27, pal["text"], stroke=stroke
+    )
+    ram_fraction = ram.get("fraction") if ram else None
+    ram_progress = (
+        max(0.0, min(1.0, ram_fraction)) if ram_fraction is not None else None
+    )
+    bar = (109, 374, 371, 386)
+    draw.rounded_rectangle(bar, radius=6, fill=pal["track"])
+    if ram_progress is not None and ram_progress > 0:
+        draw.rounded_rectangle(
+            (bar[0], bar[1], bar[0] + max(12, round(262 * ram_progress)), bar[3]),
+            radius=6,
+            fill=pal["accent"],
+        )
     return img
 
 def render_clock(
@@ -594,7 +720,7 @@ def run_hwmon(
     background: str | None = None,
     colors: dict | None = None,
 ) -> None:
-    """Rotate through available stats like the hardware monitor.
+    """Show available stats using a rotating face or the style 5 dashboard.
 
     ``items`` restricts the rotation to the given stat keys (all when None
     or when the selection matches no available sensor). ``background`` is an
@@ -603,7 +729,7 @@ def run_hwmon(
     (hex strings keyed accent/text/label/background).
     """
     if style not in HW_MONITOR_STYLES:
-        raise DisplayError(f"system monitor style must be 1-4 (got {style})")
+        raise DisplayError(f"system monitor style must be 1-5 (got {style})")
     sensors = HwSensors()
     palette = resolve_palette(colors)
     base = open_background(background)
@@ -611,7 +737,9 @@ def run_hwmon(
     static = base if isinstance(base, Image.Image) else None
     frame_s = 1.0 / animated.fps if animated else refresh_s
 
-    wanted = set(items) if items else None
+    # Dashboard metrics have a fixed layout, so selection filters only apply
+    # to the four rotating single-stat styles.
+    wanted = set(items) if items and style != 5 else None
 
     def _read_stats() -> list[dict]:
         fresh = sensors.read()
@@ -648,7 +776,11 @@ def run_hwmon(
                 index += 1
                 next_switch = t0 + switch_s
             frame = animated.frame() if animated else static
-            disp.send_image(render_stat(stats[index % len(stats)], frame, palette, style))
+            if style == 5:
+                image = render_dashboard(stats, frame, palette)
+            else:
+                image = render_stat(stats[index % len(stats)], frame, palette, style)
+            disp.send_image(image)
             if isinstance(animated, _AnimatedImageBackground):
                 # Align the next send to the animation's own frame boundary
                 # so frames are neither doubled nor skipped (no judder).

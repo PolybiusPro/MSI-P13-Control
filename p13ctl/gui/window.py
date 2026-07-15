@@ -202,8 +202,9 @@ class MainWindow(QMainWindow):
         style_row = QHBoxLayout()
         style_row.addWidget(QLabel("Style", self._sysmon_opts))
         self._sysmon_style_combo = QComboBox(self._sysmon_opts)
-        for style in range(1, 5):
-            self._sysmon_style_combo.addItem(f"Style {style}", style)
+        for style in range(1, 6):
+            label = "Style 5 — Dashboard" if style == 5 else f"Style {style}"
+            self._sysmon_style_combo.addItem(label, style)
         self._sysmon_style_combo.currentIndexChanged.connect(self._on_sysmon_opts_changed)
         style_row.addWidget(self._sysmon_style_combo)
         style_row.addStretch()
@@ -282,7 +283,9 @@ class MainWindow(QMainWindow):
         self._clock_style_combo.setVisible(mode == MODE_CLOCK)
         self._sysmon_opts.setVisible(mode == MODE_SYSMON)
         self._face_tabs.setVisible(mode in (MODE_SYSMON, MODE_CLOCK))
-        self._face_tabs.setTabVisible(0, mode == MODE_SYSMON)  # Metrics is sysmon-only
+        self._face_tabs.setTabVisible(
+            0, mode == MODE_SYSMON and self._selected_sysmon_style() != 5
+        )
         self._bg_widget.setVisible(mode in (MODE_SYSMON, MODE_CLOCK))
 
     def _selected_mode(self) -> str:
@@ -519,6 +522,8 @@ class MainWindow(QMainWindow):
         A checkbox counts only while its device group is checked (group
         unchecked disables its children).
         """
+        if self._selected_sysmon_style() == 5:
+            return []
         checked = [
             str(cb.property("key"))
             for cb in self._stat_checks
@@ -537,6 +542,11 @@ class MainWindow(QMainWindow):
     def _on_sysmon_opts_changed(self, *_args) -> None:
         if self._updating_sysmon or self._closing:
             return
+        dashboard = self._selected_sysmon_style() == 5
+        self._switch_combo.setEnabled(not dashboard)
+        self._face_tabs.setTabVisible(
+            0, self._selected_mode() == MODE_SYSMON and not dashboard
+        )
         self._sysmon_opts_timer.start()
 
     def _apply_sysmon_opts(self) -> None:
@@ -555,6 +565,7 @@ class MainWindow(QMainWindow):
         style_index = self._sysmon_style_combo.findData(int(saved.get("monitor_style") or 1))
         if style_index >= 0:
             self._sysmon_style_combo.setCurrentIndex(style_index)
+        self._switch_combo.setEnabled(self._selected_sysmon_style() != 5)
         index = self._switch_combo.findData(int(saved.get("switch") or 10))
         if index >= 0:
             self._switch_combo.setCurrentIndex(index)
@@ -576,6 +587,7 @@ class MainWindow(QMainWindow):
 
     _COLOR_FIELDS = (
         ("accent", "Accent"),
+        ("track", "Unfilled progress"),
         ("text", "Value text"),
         ("label", "Labels"),
         ("background", "Background"),
