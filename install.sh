@@ -7,7 +7,7 @@ LINUX="$ROOT/tools/linux"
 VENV="$ROOT/.venv"
 
 DO_SYSTEM_DEPS=1
-DO_EVDI=1
+DO_EVDI=0
 DO_UDEV=1
 DO_PYTHON=1
 DO_BLACKLIST=0
@@ -24,11 +24,11 @@ usage() {
   cat <<EOF
 Usage: $0 [options]
 
-Install p13ctl, system dependencies, udev rules, and EVDI (virtual monitor).
+Install p13ctl, system dependencies, udev rules, and user-session services.
 
 Options:
-  --evdi-only       Install only EVDI (kernel module, boot load, libevdi)
-  --no-evdi         Skip EVDI
+  --evdi-only       Legacy: install the optional EVDI kernel backend
+  --no-evdi         Accepted for compatibility (EVDI is disabled by default)
   --no-system-deps  Skip apt/dnf/pacman packages
   --no-udev         Skip udev rules
   --no-python       Skip virtualenv and pip install
@@ -200,15 +200,6 @@ disable_displaylink_service() {
   fi
 }
 
-install_evdi_boot_config() {
-  echo "==> Configuring EVDI boot load"
-  run_root cp "$LINUX/evdi-modules-load.conf" /etc/modules-load.d/evdi-p13.conf
-  run_root cp "$LINUX/evdi-p13.service" /etc/systemd/system/evdi-p13.service
-  run_root systemctl daemon-reload
-  run_root systemctl enable dkms.service 2>/dev/null || true
-  run_root systemctl enable evdi-p13.service
-}
-
 remove_conflicting_evdi_configs() {
   run_root rm -f /etc/modprobe.d/evdi.conf /etc/modules-load.d/evdi.conf
 }
@@ -309,10 +300,9 @@ Enroll the DKMS signing key, then reboot:
 
 In the blue MOK Manager screen: Enroll MOK → Continue → Yes → enter password → Reboot.
 
-After reboot, dkms.service builds evdi and evdi-p13.service loads it.
+After reboot, rerun this legacy EVDI-only install if you still need it.
 
 SB
-      install_evdi_boot_config
       return 0
     fi
     die "DKMS build for evdi failed — check: dkms status; journalctl -u dkms -b"
@@ -327,15 +317,24 @@ SB
   fi
 
   disable_displaylink_service
-  install_evdi_boot_config
-
   link_libevdi
-  echo "    EVDI rebuilds via dkms.service (AUTOINSTALL), loads via evdi-p13.service"
+  echo "    EVDI installed for this session; no boot-time loader was configured"
 }
 
 install_udev() {
   echo "==> Installing udev rules"
   run_root cp "$LINUX/99-msi-p13.rules" /etc/udev/rules.d/
+  # The rules also grant GROUP="plugdev": logind's uaccess ACL is revoked when
+  # the session closes, which is exactly when p13-panel-off's ExecStop sets
+  # brightness 0 at logout/shutdown. Group access survives session teardown.
+  local target_user="${SUDO_USER:-$USER}"
+  if ! getent group plugdev >/dev/null; then
+    run_root groupadd plugdev
+  fi
+  if ! id -nG "$target_user" | tr ' ' '\n' | grep -qx plugdev; then
+    run_root usermod -aG plugdev "$target_user"
+    echo "    Added $target_user to plugdev (takes effect at next login)"
+  fi
   run_root udevadm control --reload-rules
   run_root udevadm trigger
   echo "    Added /etc/udev/rules.d/99-msi-p13.rules"
@@ -475,7 +474,8 @@ Try:
   p13ctl display desktop --capture
   p13ctl sysmon
 
-Boot: p13-display.service applies saved Display Mode at login (disable with --no-boot-display).
+Login: p13-display.service applies the saved Display Mode in the user session.
+Logout/restart: p13-panel-off.service sends brightness 0 before the session exits.
 
 Re-plug the P13 USB cable after udev rule install.
 

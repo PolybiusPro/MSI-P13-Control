@@ -120,9 +120,9 @@ def _uri_to_path(uri: str) -> str:
 
 def _grab_portal() -> Image.Image | None:
     try:
-        import dbus
-        from dbus.mainloop.glib import DBusGMainLoop
-        from gi.repository import GLib
+        import dbus  # pyright: ignore[reportMissingImports]
+        from dbus.mainloop.glib import DBusGMainLoop  # pyright: ignore[reportMissingImports]
+        from gi.repository import GLib  # pyright: ignore[reportMissingImports]
     except ImportError:
         _LOGGER.debug("portal capture needs python3-dbus and PyGObject; skipping")
         return None
@@ -203,8 +203,8 @@ def _grab_wayland() -> Image.Image:
 
     raise DisplayError(
         "Wayland screen capture failed (--capture fallback).\n"
-        "Prefer the default virtual monitor: p13ctl display desktop\n"
-        "For capture mode install spectacle (KDE), gnome-screenshot (GNOME), or grim (wlroots).\n"
+        "Install a userspace screenshot backend: spectacle (KDE), "
+        "gnome-screenshot (GNOME), or grim (wlroots).\n"
         f"Tried: {', '.join(tried)}"
     )
 

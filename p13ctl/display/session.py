@@ -10,10 +10,9 @@ from typing import TYPE_CHECKING
 import usb.core
 import usb.util
 
-from .artinchip import DISPLAY_INTERFACE, PRODUCT_ID, VENDOR_ID, DisplayError
+from .artinchip import DISPLAY_INTERFACE, ArtinchipDisplay, DisplayError
 
 if TYPE_CHECKING:
-    from .artinchip import ArtinchipDisplay
     from .evdi_bridge import EvdiBridge
 
 _LOGGER = logging.getLogger(__name__)
@@ -60,7 +59,7 @@ def wait_for_display_usb(timeout: float = 8.0) -> None:
     last_error: Exception | None = None
     while time.monotonic() < deadline:
         stop_active_sessions()
-        dev = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+        dev = ArtinchipDisplay.find()
         if dev is None:
             raise DisplayError("Artinchip display 33c3:0e02 not found")
         try:
@@ -75,8 +74,8 @@ def wait_for_display_usb(timeout: float = 8.0) -> None:
                 raise DisplayError(f"USB error: {exc}") from exc
             try:
                 usb.util.dispose_resources(dev)
-            except (TypeError, usb.core.USBError):
-                usb.util.dispose_resources()
+            except usb.core.USBError:
+                pass
             time.sleep(0.25)
     detail = str(last_error) if last_error else "timeout"
     raise DisplayError(

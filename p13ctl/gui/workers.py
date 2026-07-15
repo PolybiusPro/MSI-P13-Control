@@ -34,7 +34,7 @@ class TaskWorker(QThread):
             self.finished_ok.emit(result)
 
 class MirrorWorker(QThread):
-    """Run the EVDI extended-display loop (fallback when no systemd service)."""
+    """Run the userspace desktop-mirror loop when no service is active."""
 
     error = Signal(str)
     stopped = Signal()
@@ -52,35 +52,31 @@ class MirrorWorker(QThread):
         self.quality = quality
         self.rotate = rotate
         self._stop = False
+        self._display = None
 
     def request_stop(self) -> None:
         self._stop = True
-        from p13ctl.display.session import stop_active_sessions
-
-        stop_active_sessions()
+        if self._display is not None:
+            self._display.request_stop()
 
     def run(self) -> None:
-        from p13ctl.display.artinchip import DisplayError
-        from p13ctl.display.session import stop_active_sessions
-        from p13ctl.display.virtual_monitor import run_virtual_monitor
+        from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
 
         if self._stop:
             self.stopped.emit()
             return
         try:
-            run_virtual_monitor(
-                fps=self.fps,
-                quality=self.quality,
-                rotate=self.rotate,
-                configure=True,
-                save_layout=True,
-                reset_layout=False,
-            )
+            with ArtinchipDisplay(rotate=self.rotate) as disp:
+                self._display = disp
+                disp.run_desktop(
+                    interval=1.0 / max(1, self.fps),
+                    quality=self.quality,
+                )
         except DisplayError as exc:
             if not self._stop:
                 self.error.emit(str(exc))
         finally:
-            stop_active_sessions()
+            self._display = None
             self.stopped.emit()
 
 class FaceWorker(QThread):

@@ -416,7 +416,9 @@ class _AnimatedImageBackground:
     def stop(self) -> None:
         self._frames = []
 
-def open_background(path: str | None):
+def open_background(
+    path: str | None,
+) -> Image.Image | _AnimatedImageBackground | _VideoBackground | None:
     """Return None, a static PIL image, or an animated source with
     ``fps``/``frame()``/``stop()`` (PIL animation or ffmpeg video)."""
     if not path:
@@ -524,7 +526,8 @@ def run_hwmon(
     sensors = HwSensors()
     palette = resolve_palette(colors)
     base = open_background(background)
-    animated = base if hasattr(base, "frame") else None
+    animated = base if isinstance(base, (_AnimatedImageBackground, _VideoBackground)) else None
+    static = base if isinstance(base, Image.Image) else None
     frame_s = 1.0 / animated.fps if animated else refresh_s
 
     wanted = set(items) if items else None
@@ -563,9 +566,9 @@ def run_hwmon(
             if t0 >= next_switch:
                 index += 1
                 next_switch = t0 + switch_s
-            frame = animated.frame() if animated else base
+            frame = animated.frame() if animated else static
             disp.send_image(render_stat(stats[index % len(stats)], frame, palette))
-            if animated is not None and hasattr(animated, "next_delay"):
+            if isinstance(animated, _AnimatedImageBackground):
                 # Align the next send to the animation's own frame boundary
                 # so frames are neither doubled nor skipped (no judder).
                 time.sleep(animated.next_delay() + 0.002)
@@ -594,7 +597,8 @@ def run_clock(
         raise DisplayError(f"clock style must be 1-6 (got {style})")
     palette = resolve_palette(colors)
     base = open_background(background)
-    animated = base if hasattr(base, "frame") else None
+    animated = base if isinstance(base, (_AnimatedImageBackground, _VideoBackground)) else None
+    static = base if isinstance(base, Image.Image) else None
     frame_s = 1.0 / animated.fps if animated else 1.0
     last_key = None
     try:
@@ -603,7 +607,7 @@ def run_clock(
             now = datetime.now()
             if animated is not None:
                 disp.send_image(render_clock(style, now, animated.frame(), palette))
-                if hasattr(animated, "next_delay"):
+                if isinstance(animated, _AnimatedImageBackground):
                     time.sleep(animated.next_delay() + 0.002)
                 else:
                     elapsed = time.monotonic() - t0
@@ -613,7 +617,7 @@ def run_clock(
             key = (now.year, now.month, now.day, now.hour, now.minute)
             if key != last_key:
                 last_key = key
-                disp.send_image(render_clock(style, now, base, palette))
+                disp.send_image(render_clock(style, now, static, palette))
             time.sleep(1.0)
     finally:
         if animated is not None:

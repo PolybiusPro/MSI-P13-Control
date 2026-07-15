@@ -8,7 +8,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 
 | Feature                         | Linux support        | Notes                                                          |
 | ------------------------------- | -------------------- | -------------------------------------------------------------- |
-| Desktop on LCD @ 60fps          | **Implemented**      | EVDI virtual monitor (`p13ctl display desktop`)                |
+| Desktop mirror on LCD           | **Implemented**      | Userspace capture (`p13ctl display desktop`)                   |
 | LCD custom image / test pattern | **Implemented**      | JPEG streaming via Artinchip USB protocol                      |
 | System monitor on LCD           | **Experimental**     | Software-rendered HUD (`p13ctl sysmon`)                        |
 | Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
@@ -41,7 +41,7 @@ p13ctl display desktop
 p13ctl-gui
 ```
 
-`install.sh` installs system dependencies, EVDI (virtual monitor), udev rules, and `p13ctl` into a local virtualenv. It also enables `p13-display.service` so your saved **Display Mode** starts at login, and installs a **MSI P13 Control** launcher for the GUI. No environment variables required.
+`install.sh` installs system dependencies, udev access rules, and `p13ctl` into a local virtualenv. Runtime behavior is entirely in the logged-in user's session: `p13-display.service` starts the saved **Display Mode** at graphical login, while `p13-panel-off.service` sends HID brightness 0 during logout, shutdown, or restart. Neither service loads a kernel display driver or runs during Plymouth.
 
 ```bash
 ./install.sh --no-boot-display   # skip login autostart

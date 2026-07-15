@@ -8,7 +8,7 @@ CONFIG_DIR="${HOME}/.config/p13ctl"
 
 DO_PYTHON=1
 DO_UDEV=1
-DO_EVDI=1
+DO_EVDI=0
 DO_CONFIG=0
 DO_BLACKLIST=0
 DO_PACKAGES=0
@@ -29,7 +29,8 @@ Options:
   --remove-config     Delete ~/.config/p13ctl
   --remove-blacklist  Delete /etc/modprobe.d/blacklist-aic-usb-display.conf
   --remove-packages   Uninstall displaylink/evdi-dkms packages (dnf/apt)
-  --keep-evdi         Leave EVDI kernel module and boot config in place
+  --remove-evdi       Remove legacy EVDI kernel module and boot config
+  --keep-evdi         Compatibility option; EVDI is kept by default
   --keep-udev         Leave udev rules in place
   --keep-python       Leave .venv in place
   --keep-boot-display Leave p13-display.service user unit in place
@@ -48,6 +49,7 @@ while [[ $# -gt 0 ]]; do
     --remove-config) DO_CONFIG=1; shift ;;
     --remove-blacklist) DO_BLACKLIST=1; shift ;;
     --remove-packages) DO_PACKAGES=1; shift ;;
+    --remove-evdi) DO_EVDI=1; shift ;;
     --keep-evdi) DO_EVDI=0; shift ;;
     --keep-udev) DO_UDEV=0; shift ;;
     --keep-python) DO_PYTHON=0; shift ;;
@@ -234,11 +236,11 @@ Uninstall complete.
 Removed:
   - p13ctl virtualenv (unless --keep-python)
   - udev rules (unless --keep-udev)
-  - EVDI module/config (unless --keep-evdi)
+$( [[ "$DO_EVDI" == "1" ]] && echo "  - legacy EVDI module/config" )
 $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )
-$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service / p13-panel-off.service (boot display, panel off)" )
+$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service / p13-panel-off.service (login display, logout panel off)" )
 $( [[ "$DO_GUI" == "1" ]] && echo "  - p13ctl-gui desktop launcher" )
 
 System packages (python3, libusb, dkms, etc.) were left installed.

@@ -7,16 +7,18 @@ https://github.com/hevnsnt/artinchip-linux
 from __future__ import annotations
 
 import io
+import errno
 import logging
 import os
 import struct
 import time
-from typing import Optional
+from typing import Optional, cast
 
 import usb.core
 import usb.util
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
+from cryptography.hazmat.primitives.asymmetric import rsa
 from PIL import Image
 
 _LOGGER = logging.getLogger(__name__)
@@ -46,10 +48,13 @@ hwIDAQAB
 class DisplayError(RuntimeError):
     pass
 
-def _load_rsa_key():
-    return serialization.load_pem_public_key(RSA_PUB_PEM)
+def _load_rsa_key() -> rsa.RSAPublicKey:
+    key = serialization.load_pem_public_key(RSA_PUB_PEM)
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise DisplayError("embedded Artinchip public key is not RSA")
+    return key
 
-def _rsa_public_decrypt(pub_key, ciphertext: bytes) -> bytes:
+def _rsa_public_decrypt(pub_key: rsa.RSAPublicKey, ciphertext: bytes) -> bytes:
     n = pub_key.public_numbers().n
     e = pub_key.public_numbers().e
     m = pow(int.from_bytes(ciphertext, "big"), e, n)
@@ -81,8 +86,13 @@ class ArtinchipDisplay:
         self._stop_requested = True
 
     @staticmethod
-    def find():
-        return usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
+    def find() -> Optional[usb.core.Device]:
+        # find() without find_all yields a single device; pyusb types it as a
+        # union with the find_all generator, hence the cast.
+        return cast(
+            "Optional[usb.core.Device]",
+            usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID),
+        )
 
     def connect(self) -> None:
         dev = self.find()
@@ -115,9 +125,9 @@ class ArtinchipDisplay:
         # Skip on refresh paths (e.g. hid rotate) — host mode is already on and HID
         # handoff is multi-second.
         if self._enable_host:
-            try:
-                from p13ctl.hid.msi_p13 import HidError, enable_host_display
+            from p13ctl.hid.msi_p13 import HidError, enable_host_display
 
+            try:
                 enable_host_display()
             except HidError as exc:
                 _LOGGER.warning(
@@ -184,7 +194,40 @@ class ArtinchipDisplay:
         self._bulk_out(plaintext)
         return True
 
+    def _reconnect(self, timeout: float = 10.0) -> None:
+        """Reattach after the panel drops off the bus (host-handoff reboot)."""
+        self.close()
+        deadline = time.monotonic() + timeout
+        while True:
+            try:
+                # Host mode survives the firmware reboot; re-sending the HID
+                # handoff would only risk another re-enumeration.
+                enable_host = self._enable_host
+                self._enable_host = False
+                try:
+                    self.connect()
+                finally:
+                    self._enable_host = enable_host
+                return
+            except DisplayError:
+                if time.monotonic() >= deadline:
+                    raise
+                time.sleep(0.5)
+
     def send_jpeg(self, jpeg_data: bytes, media_format: int = 0) -> None:
+        try:
+            self._send_jpeg(jpeg_data, media_format)
+        except usb.core.USBError as exc:
+            if getattr(exc, "errno", None) != errno.ENODEV:
+                raise
+            # The cold-boot extendedDisplay handoff reboots the panel's USB
+            # stack: the device re-enumerates moments after connect and the
+            # first frame hits a stale handle.
+            _LOGGER.info("display re-enumerated; reconnecting")
+            self._reconnect()
+            self._send_jpeg(jpeg_data, media_format)
+
+    def _send_jpeg(self, jpeg_data: bytes, media_format: int) -> None:
         assert self._dev is not None
         header = struct.pack(
             "<IIHHII",

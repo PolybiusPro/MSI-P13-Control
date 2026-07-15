@@ -130,7 +130,7 @@ def _stream() -> dict[str, int]:
 def run_saved_display_mode() -> int:
     """Apply the saved Display Mode (used at login by p13-display.service).
 
-    Long-running modes (extended, sysmon) block until stopped.
+    Long-running modes (desktop mirror, sysmon, clock) block until stopped.
     One-shot modes (off, test, image) apply a frame and return.
     """
     saved = get_saved_mode()
@@ -209,18 +209,18 @@ def run_saved_display_mode() -> int:
             return 1
         return 0
 
-    # MODE_EXTENDED
-    from .virtual_monitor import run_virtual_monitor
-
+    # MODE_EXTENDED is retained as a saved-config key for compatibility.  It
+    # now means a userspace desktop mirror and never creates a DRM device.
     try:
-        run_virtual_monitor(
-            fps=stream["fps"],
-            quality=stream["quality"],
-            rotate=stream["rotate"],
-            configure=True,
-            save_layout=True,
-            reset_layout=False,
-        )
+        with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
+            if threading.current_thread() is threading.main_thread():
+                signal.signal(signal.SIGTERM, lambda *_: disp.request_stop())
+                signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
+            print("Desktop mirror running (Ctrl+C to stop)...")
+            disp.run_desktop(
+                interval=1.0 / max(1, stream["fps"]),
+                quality=stream["quality"],
+            )
     except DisplayError as exc:
         print(f"Display error: {exc}", flush=True)
         return 1

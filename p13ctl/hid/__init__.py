@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .msi_p13 import HidError, P13HidController, enable_host_display
 
 __all__ = ["P13HidController", "HidError", "enable_host_display"]
 

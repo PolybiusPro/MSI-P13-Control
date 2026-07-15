@@ -4,6 +4,10 @@ Documentation=file://@ROOT@/README.md
 # Stops after p13-display.service so brightness 0 is the last panel command.
 Before=p13-display.service
 PartOf=graphical-session.target
+# The user manager stops this unit for both logout and machine shutdown. Keep
+# the HID off command ahead of the final user-manager exit transaction.
+Before=exit.target shutdown.target
+Conflicts=exit.target shutdown.target
 
 [Service]
 Type=simple
@@ -12,6 +16,7 @@ ExecStop=@P13CTL_BIN@ hid brightness 0 --no-save
 Restart=on-failure
 RestartSec=10
 TimeoutStopSec=10
+KillMode=control-group
 Environment=PYTHONUNBUFFERED=1
 
 [Install]
