@@ -10,7 +10,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | ------------------------------- | -------------------- | -------------------------------------------------------------- |
 | Extended monitor on LCD         | **Implemented**      | EVDI virtual monitor (`p13ctl display desktop`)                |
 | LCD custom image / test pattern | **Implemented**      | JPEG streaming via Artinchip USB protocol                      |
-| System monitor on LCD           | **Experimental**     | Four software-rendered styles (`p13ctl sysmon --style 1..4`)   |
+| System monitor on LCD           | **Implemented**      | Four software-rendered styles (`p13ctl sysmon --style 1..4`)   |
 | Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
 | Leave firmware splash (HID)     | **Implemented**      | Auto on display connect; or `p13ctl hid host on`               |
 | Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/` |
