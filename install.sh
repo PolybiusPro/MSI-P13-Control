@@ -335,17 +335,6 @@ SB
 install_udev() {
   echo "==> Installing udev rules"
   run_root cp "$LINUX/99-msi-p13.rules" /etc/udev/rules.d/
-  # The rules also grant GROUP="plugdev": logind's uaccess ACL is revoked when
-  # the session closes, which is exactly when p13-panel-off's ExecStop sets
-  # brightness 0 at logout/shutdown. Group access survives session teardown.
-  local target_user="${SUDO_USER:-$USER}"
-  if ! getent group plugdev >/dev/null; then
-    run_root groupadd plugdev
-  fi
-  if ! id -nG "$target_user" | tr ' ' '\n' | grep -qx plugdev; then
-    run_root usermod -aG plugdev "$target_user"
-    echo "    Added $target_user to plugdev (takes effect at next login)"
-  fi
   run_root udevadm control --reload-rules
   run_root udevadm trigger
   echo "    Added /etc/udev/rules.d/99-msi-p13.rules"
