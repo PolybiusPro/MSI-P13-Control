@@ -1,11 +1,21 @@
 from __future__ import annotations
 
 import hashlib
+import itertools
+import shutil
 
 import pytest
 
 from p13ctl.display.artinchip import DisplayError
-from p13ctl.display.faces import HW_MONITOR_STYLES, render_stat, run_hwmon
+from p13ctl.display.faces import (
+    HW_MONITOR_STYLES,
+    TEST_BACKGROUNDS,
+    _AnimatedImageBackground,
+    _VideoBackground,
+    open_background,
+    render_stat,
+    run_hwmon,
+)
 
 _ITEM = {
     "title": "CPU TEMP",
@@ -33,3 +43,37 @@ def test_invalid_hardware_monitor_style_is_rejected(style: int) -> None:
 
     with pytest.raises(DisplayError, match="style must be 1-4"):
         run_hwmon(object(), style=style)
+
+def test_bundled_test_backgrounds_exist() -> None:
+    for name, path in TEST_BACKGROUNDS.items():
+        assert path.is_file(), name
+
+def test_webp_test_background_opens_as_looping_animation() -> None:
+    background = open_background("red-ball.webp")
+    assert isinstance(background, _AnimatedImageBackground)
+    try:
+        frame = background.frame()
+        assert frame.mode == "RGB" and frame.size == (480, 480)
+        # The 5s clip keeps 75 subsampled frames (15fps); losing the
+        # per-frame durations to the 100ms fallback would report 5fps.
+        assert 10.0 < background.fps <= 30.0
+        assert background.next_delay() >= 0.0
+    finally:
+        background.stop()
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="requires ffmpeg")
+def test_mp4_test_background_loops_without_freezing() -> None:
+    background = open_background("red-ball.mp4")
+    assert isinstance(background, _VideoBackground)
+    try:
+        first = background.frame()
+        assert first.mode == "RGB" and first.size == (480, 480)
+        # Two passes of the 5s/30fps clip; a stuck loop transition would
+        # repeat the final frame for dozens of reads (the -stream_loop bug).
+        digests = [
+            hashlib.sha256(background.frame().tobytes()).digest() for _ in range(300)
+        ]
+    finally:
+        background.stop()
+    longest_freeze = max(len(list(run)) for _, run in itertools.groupby(digests))
+    assert longest_freeze < 10

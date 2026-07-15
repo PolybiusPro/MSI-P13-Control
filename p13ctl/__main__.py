@@ -371,7 +371,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_sm.add_argument(
         "--background",
         default=None,
-        help="image or video file behind the stats (video loops via ffmpeg)",
+        help="image or video file behind the stats (video loops via ffmpeg); "
+        "bundled test animations: red-ball.mp4, red-ball.webp",
     )
     p_sm.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
     p_sm.set_defaults(func=cmd_sysmon)
@@ -381,7 +382,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_ck.add_argument(
         "--background",
         default=None,
-        help="image or video file behind the clock (video loops via ffmpeg)",
+        help="image or video file behind the clock (video loops via ffmpeg); "
+        "bundled test animations: red-ball.mp4, red-ball.webp",
     )
     p_ck.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
     p_ck.set_defaults(func=cmd_clock)

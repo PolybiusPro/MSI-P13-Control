@@ -40,6 +40,9 @@ p13ctl-gui = "p13ctl.gui.main:main"
 where = ["."]
 include = ["p13ctl*"]
 
+[tool.setuptools.package-data]
+p13ctl = ["assets/*"]
+
 [[tool.mypy.overrides]]
 module = ["hid", "usb.*", "dbus", "dbus.*", "gi.repository"]
 ignore_missing_imports = true

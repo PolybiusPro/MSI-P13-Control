@@ -315,6 +315,13 @@ class HwSensors:
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
 VIDEO_FPS = 30
 
+_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
+# Bundled sample animations, selectable by bare name for testing backgrounds.
+TEST_BACKGROUNDS = {
+    "red-ball.mp4": _ASSETS_DIR / "red-ball.mp4",
+    "red-ball.webp": _ASSETS_DIR / "red-ball.webp",
+}
+
 def _fit_panel(img: Image.Image) -> Image.Image:
     """Cover-crop to the square panel."""
     img = img.convert("RGB")
@@ -436,9 +443,15 @@ def open_background(
     path: str | None,
 ) -> Image.Image | _AnimatedImageBackground | _VideoBackground | None:
     """Return None, a static PIL image, or an animated source with
-    ``fps``/``frame()``/``stop()`` (PIL animation or ffmpeg video)."""
+    ``fps``/``frame()``/``stop()`` (PIL animation or ffmpeg video).
+
+    ``path`` may also be the bare name of a bundled test background
+    (see ``TEST_BACKGROUNDS``)."""
     if not path:
         return None
+    bundled = TEST_BACKGROUNDS.get(path)
+    if bundled is not None:
+        path = str(bundled)
     if not Path(path).is_file():
         _LOGGER.warning("background missing, using plain: %s", path)
         return None

@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
     QMessageBox,
     QPushButton,
     QSlider,
@@ -31,7 +32,7 @@ from PySide6.QtWidgets import (
 
 from p13ctl.device import list_devices
 from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
-from p13ctl.display.faces import DEFAULT_COLORS
+from p13ctl.display.faces import DEFAULT_COLORS, TEST_BACKGROUNDS
 from p13ctl.display.layout import (
     apply_content_rotation,
     blank_panel_off,
@@ -177,7 +178,15 @@ class MainWindow(QMainWindow):
         bg_row = QHBoxLayout(self._bg_widget)
         bg_row.setContentsMargins(0, 0, 0, 0)
         self._bg_btn = QPushButton("Background…", self._bg_widget)
-        self._bg_btn.clicked.connect(self._choose_face_background)
+        bg_menu = QMenu(self._bg_btn)
+        bg_menu.addAction("Choose file…", self._choose_face_background)
+        bg_menu.addSeparator()
+        for name, sample in TEST_BACKGROUNDS.items():
+            bg_menu.addAction(
+                f"Test: {name}",
+                lambda _checked=False, p=str(sample): self._set_face_background(p),
+            )
+        self._bg_btn.setMenu(bg_menu)
         bg_row.addWidget(self._bg_btn)
         self._bg_clear_btn = QPushButton("Clear", self._bg_widget)
         self._bg_clear_btn.clicked.connect(self._clear_face_background)
