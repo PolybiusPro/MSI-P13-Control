@@ -11,7 +11,6 @@ DO_EVDI=1
 DO_UDEV=1
 DO_PYTHON=1
 DO_BLACKLIST=0
-WITH_SYSMON=1
 WITH_DESKTOP=1
 DO_BOOT_DISPLAY=1
 WITH_GUI=1
@@ -406,7 +405,6 @@ install_python() {
 
   echo "==> Installing p13ctl"
   local extras_parts=()
-  [[ "$WITH_SYSMON" == "1" ]] && extras_parts+=("sysmon")
   [[ "$WITH_DESKTOP" == "1" ]] && extras_parts+=("desktop")
   [[ "$WITH_GUI" == "1" ]] && extras_parts+=("gui")
   local extras=""

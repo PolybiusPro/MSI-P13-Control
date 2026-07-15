@@ -259,14 +259,29 @@ class ArtinchipDisplay:
         *,
         switch: float = 10.0,
         items: list[str] | None = None,
+        background: str | None = None,
+        colors: dict | None = None,
     ) -> None:
         """Rotate through hardware stats like a hardware monitor."""
         from .faces import run_hwmon
 
-        run_hwmon(self, refresh_s=interval, switch_s=switch, items=items)
+        run_hwmon(
+            self,
+            refresh_s=interval,
+            switch_s=switch,
+            items=items,
+            background=background,
+            colors=colors,
+        )
 
-    def run_clock(self, style: int = 1) -> None:
+    def run_clock(
+        self,
+        style: int = 1,
+        *,
+        background: str | None = None,
+        colors: dict | None = None,
+    ) -> None:
         """Show a digital clock face (styles 1-6 as in the Windows app)."""
         from .faces import run_clock
 
-        run_clock(self, style=style)
+        run_clock(self, style=style, background=background, colors=colors)

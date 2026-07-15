@@ -59,7 +59,26 @@ def get_saved_mode() -> dict[str, Any]:
     switch = max(1, min(120, switch))
     raw_items = raw.get("items")
     items = [str(i) for i in raw_items] if isinstance(raw_items, list) and raw_items else None
-    return {"name": name, "image": image_path, "style": style, "switch": switch, "items": items}
+    background = raw.get("background")
+    background_path = str(background) if background else None
+    if background_path and not Path(background_path).is_file():
+        _LOGGER.warning("saved background missing: %s", background_path)
+        background_path = None
+    raw_colors = raw.get("colors")
+    colors = (
+        {str(k): str(v) for k, v in raw_colors.items()}
+        if isinstance(raw_colors, dict) and raw_colors
+        else None
+    )
+    return {
+        "name": name,
+        "image": image_path,
+        "style": style,
+        "switch": switch,
+        "items": items,
+        "background": background_path,
+        "colors": colors,
+    }
 
 def update_saved_mode(
     *,
@@ -68,8 +87,14 @@ def update_saved_mode(
     style: int | None = None,
     switch: int | None = None,
     items: list[str] | None = None,
+    background: str | None = None,
+    colors: dict | None = None,
 ) -> Path:
-    """Persist the Display Mode selection and its per-mode options."""
+    """Persist the Display Mode selection and its per-mode options.
+
+    ``background`` keeps the existing value when None and clears it when "";
+    ``colors`` likewise (None keeps, empty dict clears).
+    """
     if name not in VALID_MODES:
         raise DisplayError(f"unknown display mode: {name}")
     mode: dict[str, Any] = {"name": name}
@@ -84,6 +109,13 @@ def update_saved_mode(
         selected = items if items is not None else existing["items"]
         if selected:
             mode["items"] = selected
+    if name in (MODE_SYSMON, MODE_CLOCK):
+        chosen = background if background is not None else existing["background"]
+        if chosen:
+            mode["background"] = chosen
+        chosen_colors = colors if colors is not None else existing["colors"]
+        if chosen_colors:
+            mode["colors"] = chosen_colors
     return save_display_config(mode=mode)
 
 def _stream() -> dict[str, int]:
@@ -148,7 +180,12 @@ def run_saved_display_mode() -> int:
                     signal.signal(signal.SIGTERM, lambda *_: disp.request_stop())
                     signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
                 print("System monitor running (Ctrl+C to stop)...")
-                disp.run_sysmon(switch=saved["switch"], items=saved["items"])
+                disp.run_sysmon(
+                    switch=saved["switch"],
+                    items=saved["items"],
+                    background=saved["background"],
+                    colors=saved["colors"],
+                )
         except DisplayError as exc:
             print(f"Display error: {exc}", flush=True)
             return 1
@@ -161,7 +198,11 @@ def run_saved_display_mode() -> int:
                     signal.signal(signal.SIGTERM, lambda *_: disp.request_stop())
                     signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
                 print(f"Clock running (style {saved['style']}, Ctrl+C to stop)...")
-                disp.run_clock(style=saved["style"])
+                disp.run_clock(
+                    style=saved["style"],
+                    background=saved["background"],
+                    colors=saved["colors"],
+                )
         except DisplayError as exc:
             print(f"Display error: {exc}", flush=True)
             return 1

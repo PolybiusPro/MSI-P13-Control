@@ -97,6 +97,8 @@ class FaceWorker(QThread):
         style: int = 1,
         switch: float = 10.0,
         items: list[str] | None = None,
+        background: str | None = None,
+        colors: dict | None = None,
         interval: float = 1.0,
         parent: QObject | None = None,
     ) -> None:
@@ -106,6 +108,8 @@ class FaceWorker(QThread):
         self.style = style
         self.switch = switch
         self.items = items
+        self.background = background
+        self.colors = colors
         self.interval = interval
         self._stop = False
         self._display = None
@@ -126,9 +130,19 @@ class FaceWorker(QThread):
             with ArtinchipDisplay(rotate=self.rotate) as disp:
                 self._display = disp
                 if self.face == "clock":
-                    disp.run_clock(style=self.style)
+                    disp.run_clock(
+                        style=self.style,
+                        background=self.background,
+                        colors=self.colors,
+                    )
                 else:
-                    disp.run_sysmon(interval=self.interval, switch=self.switch, items=self.items)
+                    disp.run_sysmon(
+                        interval=self.interval,
+                        switch=self.switch,
+                        items=self.items,
+                        background=self.background,
+                        colors=self.colors,
+                    )
         except DisplayError as exc:
             if not self._stop:
                 self.error.emit(str(exc))

@@ -8,8 +8,10 @@ from pathlib import Path
 
 from PIL import Image
 from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QFileDialog,
     QFormLayout,
@@ -22,12 +24,14 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QStatusBar,
+    QTabWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from p13ctl.device import list_devices
 from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
+from p13ctl.display.faces import DEFAULT_COLORS
 from p13ctl.display.layout import (
     apply_content_rotation,
     blank_panel_off,
@@ -81,6 +85,8 @@ class MainWindow(QMainWindow):
         self._updating_brightness = False
         self._updating_clock_style = False
         self._updating_sysmon = False
+        self._face_background: str | None = None
+        self._face_colors: dict[str, str] = {}
         self._image_path: str | None = None
         self._active_mode: str | None = MODE_OFF
 
@@ -167,6 +173,20 @@ class MainWindow(QMainWindow):
         self._clock_style_combo.setVisible(False)
         layout.addWidget(self._clock_style_combo)
 
+        self._bg_widget = QWidget(box)
+        bg_row = QHBoxLayout(self._bg_widget)
+        bg_row.setContentsMargins(0, 0, 0, 0)
+        self._bg_btn = QPushButton("Background…", self._bg_widget)
+        self._bg_btn.clicked.connect(self._choose_face_background)
+        bg_row.addWidget(self._bg_btn)
+        self._bg_clear_btn = QPushButton("Clear", self._bg_widget)
+        self._bg_clear_btn.clicked.connect(self._clear_face_background)
+        self._bg_clear_btn.setVisible(False)
+        bg_row.addWidget(self._bg_clear_btn)
+        bg_row.addStretch()
+        self._bg_widget.setVisible(False)
+        layout.addWidget(self._bg_widget)
+
         self._sysmon_opts = QWidget(box)
         opts = QVBoxLayout(self._sysmon_opts)
         opts.setContentsMargins(0, 0, 0, 0)
@@ -180,20 +200,33 @@ class MainWindow(QMainWindow):
         row.addWidget(self._switch_combo)
         row.addStretch()
         opts.addLayout(row)
-        grid = QGridLayout()
+
+        tabs = QTabWidget(self._sysmon_opts)
+        metrics = QWidget(tabs)
+        grid = QGridLayout(metrics)
         self._stat_checks: list[QCheckBox] = []
-        for i, stat in enumerate(self._available_stats()):
-            label = " ".join(
-                w if w in ("CPU", "GPU", "RAM", "SYS") else w.capitalize()
-                for w in stat["title"].split()
-            )
-            check = QCheckBox(label, self._sysmon_opts)
+        self._stat_groups: dict[str, QGroupBox] = {}
+        for stat in self._available_stats():
+            group_name = self._stat_group_name(stat["key"])
+            group = self._stat_groups.get(group_name)
+            if group is None:
+                group = QGroupBox(group_name, metrics)
+                group.setCheckable(True)
+                group.setChecked(True)
+                group.toggled.connect(self._on_sysmon_opts_changed)
+                QVBoxLayout(group)
+                position = len(self._stat_groups)
+                grid.addWidget(group, position // 2, position % 2)
+                self._stat_groups[group_name] = group
+            check = QCheckBox(self._stat_label(stat, group_name), group)
             check.setProperty("key", stat["key"])
             check.setChecked(True)
             check.toggled.connect(self._on_sysmon_opts_changed)
-            grid.addWidget(check, i // 2, i % 2)
+            group.layout().addWidget(check)
             self._stat_checks.append(check)
-        opts.addLayout(grid)
+        tabs.addTab(metrics, "Metrics")
+        tabs.addTab(self._build_colors_tab(tabs), "Colors")
+        opts.addWidget(tabs)
         self._sysmon_opts.setVisible(False)
         layout.addWidget(self._sysmon_opts)
 
@@ -237,6 +270,7 @@ class MainWindow(QMainWindow):
         self._image_btn.setVisible(mode == MODE_IMAGE)
         self._clock_style_combo.setVisible(mode == MODE_CLOCK)
         self._sysmon_opts.setVisible(mode == MODE_SYSMON)
+        self._bg_widget.setVisible(mode in (MODE_SYSMON, MODE_CLOCK))
         self._updating_mode = False
 
     def _set_combo_rotation(self, degrees: int) -> None:
@@ -412,6 +446,7 @@ class MainWindow(QMainWindow):
         self._image_btn.setVisible(self._selected_mode() == MODE_IMAGE)
         self._clock_style_combo.setVisible(self._selected_mode() == MODE_CLOCK)
         self._sysmon_opts.setVisible(self._selected_mode() == MODE_SYSMON)
+        self._bg_widget.setVisible(self._selected_mode() in (MODE_SYSMON, MODE_CLOCK))
 
     def _on_mode_combo_changed(self, _index: int) -> None:
         if self._updating_mode or self._closing:
@@ -420,6 +455,7 @@ class MainWindow(QMainWindow):
         self._image_btn.setVisible(mode == MODE_IMAGE)
         self._clock_style_combo.setVisible(mode == MODE_CLOCK)
         self._sysmon_opts.setVisible(mode == MODE_SYSMON)
+        self._bg_widget.setVisible(mode in (MODE_SYSMON, MODE_CLOCK))
         if mode == self._active_mode:
             self._refresh_mode_status()
             return
@@ -434,9 +470,39 @@ class MainWindow(QMainWindow):
             _LOGGER.warning("could not enumerate hardware stats: %s", exc)
             return []
 
+    @staticmethod
+    def _stat_group_name(key: str) -> str:
+        if key.startswith("cpu_"):
+            return "CPU"
+        if key.startswith("gpu_"):
+            return "GPU"
+        if key.startswith("ram_"):
+            return "Memory"
+        if key.startswith(("sys_fan", "pump_fan")):
+            return "System"
+        return "Other"
+
+    @staticmethod
+    def _stat_label(stat: dict, group_name: str) -> str:
+        words = stat["title"].split()
+        # Inside a device group the device prefix is redundant ("CPU TEMP" -> "Temp").
+        if group_name in ("CPU", "GPU", "Memory") and len(words) > 1:
+            words = words[1:]
+        return " ".join(
+            w if w in ("CPU", "GPU", "RAM", "SYS") else w.capitalize() for w in words
+        )
+
     def _checked_stat_keys(self) -> list[str]:
-        """Selected stat keys; empty list means no filter (all stats)."""
-        checked = [str(cb.property("key")) for cb in self._stat_checks if cb.isChecked()]
+        """Selected stat keys; empty list means no filter (all stats).
+
+        A checkbox counts only while its device group is checked (group
+        unchecked disables its children).
+        """
+        checked = [
+            str(cb.property("key"))
+            for cb in self._stat_checks
+            if cb.isChecked() and cb.isEnabled()
+        ]
         if not checked or len(checked) == len(self._stat_checks):
             return []
         return checked
@@ -463,7 +529,102 @@ class MainWindow(QMainWindow):
         items = saved.get("items")
         for check in self._stat_checks:
             check.setChecked(items is None or check.property("key") in items)
+        for name, group in self._stat_groups.items():
+            group_keys = {
+                str(cb.property("key"))
+                for cb in self._stat_checks
+                if self._stat_group_name(str(cb.property("key"))) == name
+            }
+            group.setChecked(items is None or bool(group_keys & set(items)))
+        self._face_background = saved.get("background")
+        self._update_bg_button()
+        self._face_colors = dict(saved.get("colors") or {})
+        self._update_color_buttons()
         self._updating_sysmon = False
+
+    _COLOR_FIELDS = (
+        ("accent", "Accent"),
+        ("text", "Value text"),
+        ("label", "Labels"),
+        ("background", "Background"),
+    )
+
+    def _build_colors_tab(self, parent: QWidget) -> QWidget:
+        tab = QWidget(parent)
+        form = QFormLayout(tab)
+        self._color_buttons: dict[str, QPushButton] = {}
+        for key, label in self._COLOR_FIELDS:
+            button = QPushButton(tab)
+            button.setFixedWidth(110)
+            button.clicked.connect(lambda _checked=False, k=key: self._pick_face_color(k))
+            self._color_buttons[key] = button
+            form.addRow(label, button)
+        reset = QPushButton("Reset colors", tab)
+        reset.clicked.connect(self._reset_face_colors)
+        form.addRow(reset)
+        self._update_color_buttons()
+        return tab
+
+    def _update_color_buttons(self) -> None:
+        for key, button in self._color_buttons.items():
+            value = self._face_colors.get(key, DEFAULT_COLORS[key])
+            r, g, b = (int(value.lstrip("#")[i : i + 2], 16) for i in (0, 2, 4))
+            foreground = "#000000" if (r * 299 + g * 587 + b * 114) / 1000 > 128 else "#FFFFFF"
+            button.setText(value.upper())
+            button.setStyleSheet(f"background-color: {value}; color: {foreground};")
+
+    def _pick_face_color(self, key: str) -> None:
+        current = self._face_colors.get(key, DEFAULT_COLORS[key])
+        color = QColorDialog.getColor(QColor(current), self, "Choose color")
+        if not color.isValid():
+            return
+        self._face_colors[key] = color.name()
+        self._update_color_buttons()
+        self._apply_face_colors()
+
+    def _reset_face_colors(self) -> None:
+        if not self._face_colors:
+            return
+        self._face_colors = {}
+        self._update_color_buttons()
+        self._apply_face_colors()
+
+    def _apply_face_colors(self) -> None:
+        if self._closing or self._active_mode not in (MODE_SYSMON, MODE_CLOCK):
+            return
+        self._persist_mode(self._active_mode, colors=dict(self._face_colors))
+        self._apply_mode(self._active_mode)
+
+    def _update_bg_button(self) -> None:
+        path = self._face_background
+        self._bg_btn.setText(f"Background: {Path(path).name}" if path else "Background…")
+        self._bg_clear_btn.setVisible(bool(path))
+
+    def _choose_face_background(self) -> None:
+        start_dir = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.MoviesLocation
+        )
+        dialog = QFileDialog(self, "Choose background", start_dir)
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setNameFilter(
+            "Images and videos (*.png *.jpg *.jpeg *.bmp *.webp *.mp4 *.mkv *.webm *.mov *.avi *.gif)"
+        )
+        if dialog.exec() != QFileDialog.DialogCode.Accepted:
+            return
+        files = dialog.selectedFiles()
+        if files:
+            self._set_face_background(files[0])
+
+    def _clear_face_background(self) -> None:
+        self._set_face_background(None)
+
+    def _set_face_background(self, path: str | None) -> None:
+        self._face_background = path
+        self._update_bg_button()
+        if self._closing or self._active_mode not in (MODE_SYSMON, MODE_CLOCK):
+            return
+        self._persist_mode(self._active_mode, background=path or "")
+        self._apply_mode(self._active_mode)
 
     def _selected_clock_style(self) -> int:
         return int(self._clock_style_combo.currentData())
@@ -499,9 +660,19 @@ class MainWindow(QMainWindow):
         style: int | None = None,
         switch: int | None = None,
         items: list[str] | None = None,
+        background: str | None = None,
+        colors: dict | None = None,
     ) -> None:
         try:
-            update_saved_mode(name=name, image=image, style=style, switch=switch, items=items)
+            update_saved_mode(
+                name=name,
+                image=image,
+                style=style,
+                switch=switch,
+                items=items,
+                background=background,
+                colors=colors,
+            )
         except DisplayError as exc:
             _LOGGER.warning("could not save display mode: %s", exc)
 
@@ -563,6 +734,8 @@ class MainWindow(QMainWindow):
             style=self._selected_clock_style() if mode == MODE_CLOCK else None,
             switch=self._selected_switch() if mode == MODE_SYSMON else None,
             items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
+            background=(self._face_background or "") if mode in (MODE_SYSMON, MODE_CLOCK) else None,
+            colors=dict(self._face_colors) if mode in (MODE_SYSMON, MODE_CLOCK) else None,
         )
         self._refresh_mode_status()
 
@@ -779,6 +952,8 @@ class MainWindow(QMainWindow):
                 style=self._selected_clock_style() if mode == MODE_CLOCK else None,
                 switch=self._selected_switch() if mode == MODE_SYSMON else None,
                 items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
+                background=(self._face_background or "") if mode in (MODE_SYSMON, MODE_CLOCK) else None,
+                colors=dict(self._face_colors) if mode in (MODE_SYSMON, MODE_CLOCK) else None,
             )
             try:
                 start_mirror_service()
@@ -795,6 +970,8 @@ class MainWindow(QMainWindow):
             style=self._selected_clock_style(),
             switch=float(self._selected_switch()),
             items=self._checked_stat_keys() or None,
+            background=self._face_background,
+            colors=dict(self._face_colors) or None,
             parent=self,
         )
         self._sysmon_worker.error.connect(self._on_sysmon_error)

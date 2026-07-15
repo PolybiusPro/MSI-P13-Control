@@ -139,7 +139,12 @@ def cmd_sysmon(args: argparse.Namespace) -> int:
         with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
             print("Running system monitor (Ctrl+C to stop)...")
             items = [i.strip() for i in args.items.split(",") if i.strip()] if args.items else None
-            disp.run_sysmon(interval=args.interval, switch=args.switch, items=items)
+            disp.run_sysmon(
+                interval=args.interval,
+                switch=args.switch,
+                items=items,
+                background=args.background,
+            )
     except KeyboardInterrupt:
         print()
         return 0
@@ -153,7 +158,7 @@ def cmd_clock(args: argparse.Namespace) -> int:
     try:
         with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
             print(f"Running clock style {args.style} (Ctrl+C to stop)...")
-            disp.run_clock(style=args.style)
+            disp.run_clock(style=args.style, background=args.background)
     except KeyboardInterrupt:
         print()
         return 0
@@ -359,11 +364,21 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="comma-separated stat keys to rotate (e.g. cpu_temp,gpu_usage)",
     )
+    p_sm.add_argument(
+        "--background",
+        default=None,
+        help="image or video file behind the stats (video loops via ffmpeg)",
+    )
     p_sm.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
     p_sm.set_defaults(func=cmd_sysmon)
 
     p_ck = sub.add_parser("clock", help="Digital clock face")
     p_ck.add_argument("--style", type=int, default=1, choices=range(1, 7))
+    p_ck.add_argument(
+        "--background",
+        default=None,
+        help="image or video file behind the clock (video loops via ffmpeg)",
+    )
     p_ck.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
     p_ck.set_defaults(func=cmd_clock)
 
