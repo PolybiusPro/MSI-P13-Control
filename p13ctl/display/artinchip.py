@@ -2,6 +2,8 @@
 
 Protocol reverse-engineered by the Artinchip Linux community; see:
 https://github.com/hevnsnt/artinchip-linux
+Portions derived from that project, Copyright (c) 2026 Bill Swearingen
+(hevnsnt), MIT License.
 """
 
 from __future__ import annotations

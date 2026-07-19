@@ -73,4 +73,6 @@ and RAM usage. Add a photo or looping video behind it with
 
 ## License
 
-GPL-3.0-or-later. Artinchip display code is adapted from [hevnsnt/artinchip-linux](https://github.com/hevnsnt/artinchip-linux) (MIT-style community RE).
+GPL-3.0-or-later. Artinchip display code is adapted from [hevnsnt/artinchip-linux](https://github.com/hevnsnt/artinchip-linux), Copyright (c) 2026 Bill Swearingen (hevnsnt), MIT License.
+
+This project is not affiliated with or endorsed by MSI (Micro-Star International) or Artinchip. All product names are used solely to describe hardware compatibility.
