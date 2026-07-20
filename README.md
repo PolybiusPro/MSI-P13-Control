@@ -69,7 +69,26 @@ See [docs/protocol-display.md](docs/protocol-display.md) for details.
 System monitor style 5 is a five-metric dashboard with circular CPU/GPU gauges
 and RAM usage. Add a photo or looping video behind it with
 `p13ctl sysmon --style 5 --background /path/to/background.jpg`.
+
 ## Project layout
+
+```text
+p13ctl/
+├── __main__.py          CLI entry point and command dispatch
+├── device.py            USB device discovery
+├── display/             Artinchip transport, EVDI bridge, capture, and modes
+├── hid/                 HID framing, brightness, rotation, and host handoff
+├── gui/                 PySide6 control panel
+└── assets/              Bundled dashboard test backgrounds
+tools/
+├── linux/               systemd, udev, EVDI, dracut, and desktop integration
+└── windows/             Windows research notes
+docs/                       Architecture, protocol, and reverse-engineering notes
+tests/                      Protocol, display-mode, rendering, and service tests
+install.sh                  Linux installer
+uninstall.sh                Linux uninstaller
+pyproject.toml              Python package metadata and dependencies
+```
 
 ## License
 
