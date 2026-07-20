@@ -112,6 +112,7 @@ remove_evdi_configs() {
   run_root systemctl daemon-reload 2>/dev/null || true
   remove_file /etc/modprobe.d/evdi-p13.conf
   remove_file /etc/modules-load.d/evdi-p13.conf
+  remove_file /etc/dracut.conf.d/99-p13-omit-evdi.conf
   # Do not restore displaylink's /etc/modprobe.d/evdi.conf — p13ctl owns evdi config.
 }
 

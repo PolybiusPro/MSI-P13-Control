@@ -202,11 +202,25 @@ disable_displaylink_service() {
 
 install_evdi_boot_config() {
   echo "==> Configuring EVDI boot load"
-  run_root cp "$LINUX/evdi-modules-load.conf" /etc/modules-load.d/evdi-p13.conf
+  # Loading EVDI through modules-load.d makes host-only initramfs generators
+  # include the virtual DRM device.  Plymouth can then select EVDI before the
+  # physical GPU is ready and render the boot splash on a display with no
+  # connector.  The service below loads EVDI late enough for userspace without
+  # exposing it during early boot.
+  run_root rm -f /etc/modules-load.d/evdi-p13.conf
   run_root cp "$LINUX/evdi-p13.service" /etc/systemd/system/evdi-p13.service
+  if command -v dracut >/dev/null 2>&1; then
+    run_root mkdir -p /etc/dracut.conf.d
+    run_root cp "$LINUX/p13-omit-evdi.conf" /etc/dracut.conf.d/99-p13-omit-evdi.conf
+  fi
   run_root systemctl daemon-reload
   run_root systemctl enable dkms.service 2>/dev/null || true
   run_root systemctl enable evdi-p13.service
+
+  if command -v dracut >/dev/null 2>&1; then
+    echo "==> Rebuilding initramfs without EVDI (keeps Plymouth on the physical GPU)"
+    run_root dracut --force
+  fi
 }
 
 remove_conflicting_evdi_configs() {
