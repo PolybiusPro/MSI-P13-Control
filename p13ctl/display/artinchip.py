@@ -245,7 +245,13 @@ class ArtinchipDisplay:
             self._bulk_out(bytes(jpeg_data[pos : pos + MAX_TRANSFER]), timeout=10000)
         self.frame_id += 1
 
-    def send_image(self, image: Image.Image, quality: int = 85) -> None:
+    def send_image(
+        self,
+        image: Image.Image,
+        quality: int = 85,
+        *,
+        optimize: bool = True,
+    ) -> None:
         target = (self.width or 480, self.height or 480)
         img = image.convert("RGB")
         if img.size != target:
@@ -254,7 +260,7 @@ class ArtinchipDisplay:
             img = img.rotate(-self.rotate, expand=True)
             img = img.resize(target, Image.Resampling.LANCZOS)
         buf = io.BytesIO()
-        img.save(buf, format="JPEG", quality=quality, optimize=True)
+        img.save(buf, format="JPEG", quality=quality, optimize=optimize)
         self.send_jpeg(buf.getvalue())
 
     def show_test_pattern(self) -> None:
@@ -304,6 +310,8 @@ class ArtinchipDisplay:
         *,
         style: int = 1,
         switch: float = 10.0,
+        fps: int = 10,
+        quality: int = 75,
         items: list[str] | None = None,
         background: str | None = None,
         colors: dict | None = None,
@@ -316,6 +324,8 @@ class ArtinchipDisplay:
             style=style,
             refresh_s=interval,
             switch_s=switch,
+            fps=fps,
+            quality=quality,
             items=items,
             background=background,
             colors=colors,

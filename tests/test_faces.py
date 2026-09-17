@@ -6,6 +6,7 @@ import shutil
 
 import pytest
 
+from p13ctl.display import faces
 from p13ctl.display.artinchip import DisplayError
 from p13ctl.display.faces import (
     HW_MONITOR_STYLES,
@@ -45,6 +46,27 @@ def test_invalid_hardware_monitor_style_is_rejected(style: int) -> None:
 
     with pytest.raises(DisplayError, match="style must be 1-5"):
         run_hwmon(object(), style=style)
+
+def test_hardware_monitor_uses_low_cost_live_encoding(monkeypatch) -> None:
+    calls: list[dict] = []
+
+    class FakeSensors:
+        def read(self) -> list[dict]:
+            return [_ITEM]
+
+    class FakeDisplay:
+        _stop_requested = False
+
+        def send_image(self, _image, **kwargs) -> None:
+            calls.append(kwargs)
+            self._stop_requested = True
+
+    monkeypatch.setattr(faces, "HwSensors", FakeSensors)
+    monkeypatch.setattr(faces.time, "sleep", lambda _seconds: None)
+
+    run_hwmon(FakeDisplay(), fps=10, quality=72)
+
+    assert calls == [{"quality": 72, "optimize": False}]
 
 def test_dashboard_renders_all_five_reference_metrics() -> None:
     items = [

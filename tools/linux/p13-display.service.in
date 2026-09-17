@@ -10,6 +10,9 @@ ExecStart=@P13CTL_BIN@ display mode
 WorkingDirectory=@ROOT@
 Restart=on-failure
 RestartSec=10
+Nice=10
+CPUWeight=10
+CPUSchedulingPolicy=batch
 Environment=PYTHONUNBUFFERED=1
 
 [Install]

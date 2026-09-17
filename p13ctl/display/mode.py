@@ -34,6 +34,7 @@ VALID_MODES = frozenset(
 )
 PANEL_SIZE = (480, 480)
 DEFAULT_MODE = MODE_EXTENDED
+SYSMON_MAX_FPS = 10
 
 def get_saved_mode() -> dict[str, Any]:
     """Return the validated saved display mode and its face options."""
@@ -205,6 +206,8 @@ def run_saved_display_mode() -> int:
                 disp.run_sysmon(
                     style=saved["monitor_style"],
                     switch=saved["switch"],
+                    fps=max(1, min(stream["fps"], SYSMON_MAX_FPS)),
+                    quality=stream["quality"],
                     items=saved["items"],
                     background=saved["background"],
                     colors=saved["colors"],

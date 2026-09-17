@@ -81,3 +81,53 @@ def test_send_black_image_uses_saved_rotation(monkeypatch) -> None:
     assert len(sent) == 1
     assert sent[0].size == mode.PANEL_SIZE
     assert sent[0].getextrema() == ((0, 0), (0, 0), (0, 0))
+
+def test_saved_system_monitor_caps_fps_and_uses_stream_quality(monkeypatch) -> None:
+    calls: list[dict] = []
+    monkeypatch.setattr(
+        mode,
+        "get_saved_mode",
+        lambda: {
+            "name": mode.MODE_SYSMON,
+            "monitor_style": 5,
+            "switch": 5,
+            "items": None,
+            "background": None,
+            "colors": None,
+        },
+    )
+    monkeypatch.setattr(
+        mode,
+        "_stream",
+        lambda: {"fps": 60, "quality": 72, "rotate": 0},
+    )
+    monkeypatch.setattr(mode, "restore_saved_brightness", lambda: None)
+    monkeypatch.setattr(mode.threading, "current_thread", lambda: object())
+
+    class FakeDisplay:
+        def __init__(self, *, rotate: int) -> None:
+            assert rotate == 0
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return None
+
+        def run_sysmon(self, **kwargs) -> None:
+            calls.append(kwargs)
+
+    monkeypatch.setattr(mode, "ArtinchipDisplay", FakeDisplay)
+
+    assert mode.run_saved_display_mode() == 0
+    assert calls == [
+        {
+            "style": 5,
+            "switch": 5,
+            "fps": mode.SYSMON_MAX_FPS,
+            "quality": 72,
+            "items": None,
+            "background": None,
+            "colors": None,
+        }
+    ]

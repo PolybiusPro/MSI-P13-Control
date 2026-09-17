@@ -336,6 +336,8 @@ class HwSensors:
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
 VIDEO_FPS = 30
+HWMON_FPS = 10
+HWMON_JPEG_QUALITY = 75
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 # Bundled sample animations, selectable by bare name for testing backgrounds.
@@ -463,6 +465,8 @@ class _AnimatedImageBackground:
 
 def open_background(
     path: str | None,
+    *,
+    video_fps: int = VIDEO_FPS,
 ) -> Image.Image | _AnimatedImageBackground | _VideoBackground | None:
     """Return None, a static PIL image, or an animated source with
     ``fps``/``frame()``/``stop()`` (PIL animation or ffmpeg video).
@@ -482,7 +486,7 @@ def open_background(
             if not getattr(img, "is_animated", False):
                 return _fit_panel(img)
         return _AnimatedImageBackground(path)
-    video = _VideoBackground(path)
+    video = _VideoBackground(path, fps=max(1, min(VIDEO_FPS, video_fps)))
     video.start()
     return video
 
@@ -716,6 +720,8 @@ def run_hwmon(
     style: int = 1,
     refresh_s: float = 1.0,
     switch_s: float = 10.0,
+    fps: int = HWMON_FPS,
+    quality: int = HWMON_JPEG_QUALITY,
     items: list[str] | None = None,
     background: str | None = None,
     colors: dict | None = None,
@@ -730,12 +736,13 @@ def run_hwmon(
     """
     if style not in HW_MONITOR_STYLES:
         raise DisplayError(f"system monitor style must be 1-5 (got {style})")
+    fps = max(1, fps)
     sensors = HwSensors()
     palette = resolve_palette(colors)
-    base = open_background(background)
+    base = open_background(background, video_fps=fps)
     animated = base if isinstance(base, (_AnimatedImageBackground, _VideoBackground)) else None
     static = base if isinstance(base, Image.Image) else None
-    frame_s = 1.0 / animated.fps if animated else refresh_s
+    frame_s = 1.0 / min(animated.fps, fps) if animated else refresh_s
 
     # Dashboard metrics have a fixed layout, so selection filters only apply
     # to the four rotating single-stat styles.
@@ -780,11 +787,14 @@ def run_hwmon(
                 image = render_dashboard(stats, frame, palette)
             else:
                 image = render_stat(stats[index % len(stats)], frame, palette, style)
-            disp.send_image(image)
+            disp.send_image(image, quality=quality, optimize=False)
             if isinstance(animated, _AnimatedImageBackground):
                 # Align the next send to the animation's own frame boundary
-                # so frames are neither doubled nor skipped (no judder).
-                time.sleep(animated.next_delay() + 0.002)
+                # while respecting the lower system-monitor frame-rate cap.
+                elapsed = time.monotonic() - t0
+                delay = max(animated.next_delay() + 0.002, frame_s - elapsed)
+                if delay > 0:
+                    time.sleep(delay)
             else:
                 elapsed = time.monotonic() - t0
                 if frame_s - elapsed > 0:
