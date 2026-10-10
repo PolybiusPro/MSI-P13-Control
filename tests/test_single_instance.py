@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import os
+import shutil
 import socket
+import tempfile
 import time
 import uuid
 
@@ -59,3 +62,25 @@ def test_stale_socket_is_replaced(qapp) -> None:
     fresh = SingleInstance(key)
     assert fresh.acquire() is True
     fresh.close()
+
+
+def test_socket_lives_in_xdg_runtime_dir(qapp, monkeypatch) -> None:
+    runtime = tempfile.mkdtemp(dir="/tmp")
+    try:
+        monkeypatch.setenv("XDG_RUNTIME_DIR", runtime)
+        guard = SingleInstance(_key())
+        assert guard.acquire() is True
+        assert guard._server.fullServerName().startswith(runtime + os.sep)
+        guard.close()
+    finally:
+        shutil.rmtree(runtime, ignore_errors=True)
+
+
+def test_fallback_without_xdg_runtime_dir(qapp, monkeypatch) -> None:
+    monkeypatch.delenv("XDG_RUNTIME_DIR", raising=False)
+    key = _key()
+    first = SingleInstance(key)
+    assert first.acquire() is True
+    second = SingleInstance(key)
+    assert second.acquire(notify=False) is False
+    first.close()

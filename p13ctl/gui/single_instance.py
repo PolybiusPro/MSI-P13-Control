@@ -20,7 +20,12 @@ class SingleInstance(QObject):
 
     def __init__(self, key: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._name = f"{key}-{os.getuid()}"
+        runtime_dir = os.environ.get("XDG_RUNTIME_DIR")
+        if runtime_dir and os.path.isdir(runtime_dir):
+            # Per-user directory: other users cannot pre-create the socket.
+            self._name = os.path.join(runtime_dir, f"{key}.sock")
+        else:
+            self._name = f"{key}-{os.getuid()}"
         self._server = QLocalServer(self)
         self._server.newConnection.connect(self._on_connection)
 
@@ -31,8 +36,11 @@ class SingleInstance(QObject):
             if notify:
                 probe.write(_PING)
                 probe.waitForBytesWritten(500)
-            probe.disconnectFromServer()
+            probe.abort()
+            probe.deleteLater()
             return False
+        probe.abort()
+        probe.deleteLater()
         # Nobody answered: any socket file left behind is stale.
         QLocalServer.removeServer(self._name)
         if not self._server.listen(self._name):
