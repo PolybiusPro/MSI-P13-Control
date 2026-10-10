@@ -336,8 +336,7 @@ class HwSensors:
 
 _IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".gif"}
 VIDEO_FPS = 30
-HWMON_FPS = 10
-HWMON_JPEG_QUALITY = 75
+JPEG_QUALITY = 85
 
 _ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets"
 # Bundled sample animations, selectable by bare name for testing backgrounds.
@@ -720,8 +719,8 @@ def run_hwmon(
     style: int = 1,
     refresh_s: float = 1.0,
     switch_s: float = 10.0,
-    fps: int = HWMON_FPS,
-    quality: int = HWMON_JPEG_QUALITY,
+    fps: int | None = None,
+    quality: int | None = None,
     items: list[str] | None = None,
     background: str | None = None,
     colors: dict | None = None,
@@ -733,10 +732,16 @@ def run_hwmon(
     optional image or video file; a video streams at its own frame rate with
     the stat overlay composited per frame. ``colors`` overrides the palette
     (hex strings keyed accent/text/label/background).
+
+    ``fps`` caps the send rate of animated backgrounds (default
+    ``VIDEO_FPS``) and ``quality`` is the JPEG quality (default
+    ``JPEG_QUALITY``). Animated backgrounds also skip JPEG Huffman
+    optimisation to cut per-frame encode time.
     """
     if style not in HW_MONITOR_STYLES:
         raise DisplayError(f"system monitor style must be 1-5 (got {style})")
-    fps = max(1, fps)
+    fps = max(1, VIDEO_FPS if fps is None else fps)
+    quality = JPEG_QUALITY if quality is None else quality
     sensors = HwSensors()
     palette = resolve_palette(colors)
     base = open_background(background, video_fps=fps)
@@ -787,7 +792,10 @@ def run_hwmon(
                 image = render_dashboard(stats, frame, palette)
             else:
                 image = render_stat(stats[index % len(stats)], frame, palette, style)
-            disp.send_image(image, quality=quality, optimize=False)
+            if animated is not None:
+                disp.send_image(image, quality=quality, optimize=False)
+            else:
+                disp.send_image(image, quality=quality)
             if isinstance(animated, _AnimatedImageBackground):
                 # Align the next send to the animation's own frame boundary
                 # while respecting the lower system-monitor frame-rate cap.

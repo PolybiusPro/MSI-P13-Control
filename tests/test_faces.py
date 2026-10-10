@@ -3,6 +3,8 @@ from __future__ import annotations
 import hashlib
 import itertools
 import shutil
+import time
+import types
 
 import pytest
 
@@ -47,26 +49,152 @@ def test_invalid_hardware_monitor_style_is_rejected(style: int) -> None:
     with pytest.raises(DisplayError, match="style must be 1-5"):
         run_hwmon(object(), style=style)
 
-def test_hardware_monitor_uses_low_cost_live_encoding(monkeypatch) -> None:
-    calls: list[dict] = []
+class _FakeSensors:
+    def read(self) -> list[dict]:
+        return [_ITEM]
 
-    class FakeSensors:
-        def read(self) -> list[dict]:
-            return [_ITEM]
+class _FakeDisplay:
+    """Records send_image kwargs and stops the run loop after one frame."""
 
-    class FakeDisplay:
-        _stop_requested = False
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self._stop_requested = False
 
-        def send_image(self, _image, **kwargs) -> None:
-            calls.append(kwargs)
-            self._stop_requested = True
+    def send_image(self, _image, **kwargs) -> None:
+        self.calls.append(kwargs)
+        self._stop_requested = True
 
-    monkeypatch.setattr(faces, "HwSensors", FakeSensors)
-    monkeypatch.setattr(faces.time, "sleep", lambda _seconds: None)
+class _FakeVideo(_VideoBackground):
+    def __init__(self, fps: int = 30) -> None:
+        self.fps = fps
 
-    run_hwmon(FakeDisplay(), fps=10, quality=72)
+    def frame(self):
+        return faces.Image.new("RGB", (480, 480))
 
-    assert calls == [{"quality": 72, "optimize": False}]
+    def stop(self) -> None:
+        pass
+
+class _FakeAnimation(_AnimatedImageBackground):
+    def __init__(self, fps: float, boundary: float) -> None:
+        self.fps = fps
+        self._boundary = boundary
+
+    def frame(self):
+        return faces.Image.new("RGB", (480, 480))
+
+    def next_delay(self) -> float:
+        return self._boundary
+
+    def stop(self) -> None:
+        pass
+
+def _record_sleeps(monkeypatch) -> list[float]:
+    """Swap the module's clock for a stub so the global time.sleep is untouched."""
+    sleeps: list[float] = []
+    stub = types.SimpleNamespace(monotonic=time.monotonic, sleep=sleeps.append)
+    monkeypatch.setattr(faces, "time", stub)
+    return sleeps
+
+def test_hardware_monitor_static_face_keeps_default_encoding(monkeypatch) -> None:
+    disp = _FakeDisplay()
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    _record_sleeps(monkeypatch)
+
+    run_hwmon(disp, fps=10, quality=72)
+
+    assert disp.calls == [{"quality": 72}]
+
+def test_hardware_monitor_animated_face_uses_low_cost_encoding(monkeypatch) -> None:
+    disp = _FakeDisplay()
+    requested: list[int] = []
+
+    def fake_open(_path, *, video_fps):
+        requested.append(video_fps)
+        return _FakeVideo(fps=video_fps)
+
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    monkeypatch.setattr(faces, "open_background", fake_open)
+    _record_sleeps(monkeypatch)
+
+    run_hwmon(disp, fps=10, quality=72, background="clip.mp4")
+
+    assert disp.calls == [{"quality": 72, "optimize": False}]
+    assert requested == [10]
+
+@pytest.mark.parametrize(
+    ("fps", "expected"),
+    [(None, faces.VIDEO_FPS), (0, 1), (-5, 1), (12, 12)],
+)
+def test_hardware_monitor_clamps_video_fps(monkeypatch, fps, expected) -> None:
+    requested: list[int] = []
+
+    def fake_open(_path, *, video_fps):
+        requested.append(video_fps)
+        return None
+
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    monkeypatch.setattr(faces, "open_background", fake_open)
+    _record_sleeps(monkeypatch)
+
+    kwargs = {} if fps is None else {"fps": fps}
+    run_hwmon(_FakeDisplay(), **kwargs)
+
+    assert requested == [expected]
+
+def test_hardware_monitor_defaults_match_pre_optimization_behaviour(monkeypatch) -> None:
+    disp = _FakeDisplay()
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    _record_sleeps(monkeypatch)
+
+    run_hwmon(disp)
+
+    assert disp.calls == [{"quality": 85}]
+
+def test_animation_pacing_respects_fps_cap(monkeypatch) -> None:
+    sleeps = _record_sleeps(monkeypatch)
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    monkeypatch.setattr(
+        faces, "open_background", lambda *_a, **_k: _FakeAnimation(30.0, 0.033)
+    )
+
+    run_hwmon(_FakeDisplay(), fps=10, background="clip.webp")
+
+    assert len(sleeps) == 1
+    assert 0.09 < sleeps[0] <= 0.1
+
+def test_animation_pacing_waits_for_later_frame_boundary(monkeypatch) -> None:
+    sleeps = _record_sleeps(monkeypatch)
+    monkeypatch.setattr(faces, "HwSensors", _FakeSensors)
+    monkeypatch.setattr(
+        faces, "open_background", lambda *_a, **_k: _FakeAnimation(2.0, 0.5)
+    )
+
+    run_hwmon(_FakeDisplay(), fps=10, background="clip.webp")
+
+    assert sleeps == [pytest.approx(0.502)]
+
+@pytest.mark.parametrize(
+    ("requested", "expected"), [(0, 1), (10, 10), (30, 30), (120, 30)]
+)
+def test_open_background_clamps_video_fps(
+    monkeypatch, tmp_path, requested, expected
+) -> None:
+    clip = tmp_path / "clip.mp4"
+    clip.write_bytes(b"")
+    seen: list[int] = []
+
+    class RecordingVideo:
+        def __init__(self, _path: str, fps: int) -> None:
+            seen.append(fps)
+
+        def start(self) -> None:
+            pass
+
+    monkeypatch.setattr(faces, "_VideoBackground", RecordingVideo)
+
+    open_background(str(clip), video_fps=requested)
+
+    assert seen == [expected]
 
 def test_dashboard_renders_all_five_reference_metrics() -> None:
     items = [
