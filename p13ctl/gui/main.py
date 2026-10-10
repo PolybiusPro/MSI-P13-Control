@@ -2,39 +2,84 @@
 
 from __future__ import annotations
 
+import argparse
 import logging
+import signal
 import sys
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication, QMessageBox
 
+from p13ctl.gui.single_instance import SingleInstance
+from p13ctl.gui.tray import PanelTray
 from p13ctl.gui.window import MainWindow
 
+_LOGGER = logging.getLogger(__name__)
+
+
+def _parse_args(argv: list[str]) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="p13ctl-gui")
+    parser.add_argument(
+        "--minimized",
+        action="store_true",
+        help="start hidden in the system tray (used by login autostart)",
+    )
+    args, _unknown = parser.parse_known_args(argv)
+    return args
+
+
+def _noop() -> None:
+    """Timer target: waking the Qt loop lets Python run its signal handlers."""
+
+
 def main(argv: list[str] | None = None) -> int:
-    _ = argv
+    args = _parse_args(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 
     app = QApplication(sys.argv)
     app.setApplicationName("p13ctl")
     app.setOrganizationName("p13ctl")
     app.setDesktopFileName("p13ctl-gui")
-    app.setQuitOnLastWindowClosed(True)
+    app.setQuitOnLastWindowClosed(False)
+
+    guard = SingleInstance("p13ctl-gui")
+    if not guard.acquire(notify=not args.minimized):
+        return 0
 
     try:
         window = MainWindow()
     except Exception as exc:  # noqa: BLE001
-        QMessageBox.critical(None, "p13ctl GUI", f"Failed to start: {exc}")
+        _LOGGER.error("Failed to start: %s", exc)
+        if not args.minimized:
+            QMessageBox.critical(None, "p13ctl GUI", f"Failed to start: {exc}")
+        guard.close()
         return 1
 
-    window.show()
+    tray = PanelTray(window)
+    guard.show_requested.connect(window.show_and_raise)
+
+    # SIGTERM from the session manager runs the same quit path as the tray.
+    signal.signal(signal.SIGTERM, lambda *_: window.request_quit())
+    signal.signal(signal.SIGINT, lambda *_: window.request_quit())
+    pump = QTimer()
+    pump.timeout.connect(_noop)
+    pump.start(250)
+
+    if not args.minimized:
+        window.show()
     code = app.exec()
 
     # Tear down widgets before PySide atexit destroyQCoreApplication.
-    window.shutdown()
+    window.quit_app()
+    guard.close()
+    pump.stop()
+    del tray
     window.hide()
     window.deleteLater()
     app.processEvents()
 
     return code
+
 
 if __name__ == "__main__":
     raise SystemExit(main())
