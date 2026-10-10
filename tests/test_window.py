@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+
 import pytest
 import usb.core
 from PySide6.QtWidgets import QMessageBox, QSystemTrayIcon
@@ -282,3 +284,111 @@ def test_login_action_ok_ends_login_episode(make_window, monkeypatch) -> None:
     assert not window._login_timer.isActive()
     window._action_worker = None
     worker.deleteLater()
+
+
+def test_apply_mode_after_shutdown_starts_nothing(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+    started: list[int] = []
+    monkeypatch.setattr(window, "_start_sysmon", lambda: started.append(1) or True)
+    window.shutdown()
+
+    window._apply_mode("sysmon")
+
+    assert started == []
+
+
+def test_persist_layout_now_survives_kscreen_timeout(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+
+    def _timeout():
+        raise subprocess.TimeoutExpired("kscreen-doctor", 20)
+
+    monkeypatch.setattr(win, "find_connected_virtual_output", _timeout)
+
+    assert window._persist_layout_now() is False
+
+
+def test_quit_app_blanks_even_if_shutdown_raises(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+    order: list[str] = []
+
+    real_shutdown = window.shutdown
+    calls: list[int] = []
+
+    def _boom() -> None:
+        # Raise on the first call only; fixture teardown calls the real one.
+        if not calls:
+            calls.append(1)
+            raise RuntimeError("shutdown failed")
+        real_shutdown()
+
+    monkeypatch.setattr(window, "shutdown", _boom)
+    monkeypatch.setattr(win, "wait_for_display_usb", lambda: order.append("wait"))
+    monkeypatch.setattr(win, "send_black_image", lambda: order.append("black"))
+
+    window.quit_app()
+
+    assert order == ["wait", "black"]
+
+
+def test_waiting_status_only_while_retry_timer_active(make_window) -> None:
+    window, _ = make_window()
+    window._login_mode = "sysmon"
+    window._active_mode = "off"
+
+    window._login_timer.stop()
+    window._refresh_mode_status()
+    assert "Waiting" not in window._mode_status.text()
+
+    window._login_timer.start()
+    window._refresh_mode_status()
+    assert window._mode_status.text() == "Waiting for panel, retrying every 10 seconds"
+    window._login_timer.stop()
+
+
+def test_login_failure_shows_waiting_text(make_window, monkeypatch) -> None:
+    window, _ = make_window("sysmon", autostart=True)
+    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+
+    window._maybe_apply_saved_mode()
+
+    assert window._mode_status.text() == "Waiting for panel, retrying every 10 seconds"
+
+
+def test_face_worker_reports_raw_usb_error(monkeypatch, qapp) -> None:
+    import p13ctl.display.artinchip as art
+
+    def _usb_fail(*args, **kwargs):
+        raise usb.core.USBError("pipe error")
+
+    monkeypatch.setattr(art, "ArtinchipDisplay", _usb_fail)
+    worker = win_workers.FaceWorker(rotate=0)
+    errors: list[str] = []
+    stops: list[int] = []
+    worker.error.connect(errors.append)
+    worker.stopped.connect(lambda: stops.append(1))
+
+    worker.run()
+
+    assert len(errors) == 1 and "pipe error" in errors[0]
+    assert stops == [1]
+
+
+def test_mirror_worker_reports_raw_usb_error(monkeypatch, qapp) -> None:
+    import p13ctl.display.virtual_monitor as vm
+
+    def _usb_fail(**kwargs):
+        raise usb.core.USBError("pipe error")
+
+    monkeypatch.setattr(vm, "run_virtual_monitor", _usb_fail)
+    monkeypatch.setattr("p13ctl.display.session.stop_active_sessions", lambda: None)
+    worker = win_workers.MirrorWorker(fps=10, quality=50, rotate=0)
+    errors: list[str] = []
+    stops: list[int] = []
+    worker.error.connect(errors.append)
+    worker.stopped.connect(lambda: stops.append(1))
+
+    worker.run()
+
+    assert len(errors) == 1 and "pipe error" in errors[0]
+    assert stops == [1]

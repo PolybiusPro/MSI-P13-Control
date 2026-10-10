@@ -60,6 +60,8 @@ class MirrorWorker(QThread):
         stop_active_sessions()
 
     def run(self) -> None:
+        import usb.core
+
         from p13ctl.display.artinchip import DisplayError
         from p13ctl.display.session import stop_active_sessions
         from p13ctl.display.virtual_monitor import run_virtual_monitor
@@ -76,7 +78,7 @@ class MirrorWorker(QThread):
                 save_layout=True,
                 reset_layout=False,
             )
-        except (DisplayError, RuntimeError) as exc:
+        except (DisplayError, RuntimeError, usb.core.USBError) as exc:
             if not self._stop:
                 self.error.emit(str(exc))
         finally:
@@ -121,6 +123,8 @@ class FaceWorker(QThread):
             display.request_stop()
 
     def run(self) -> None:
+        import usb.core
+
         from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
 
         if self._stop:
@@ -144,7 +148,7 @@ class FaceWorker(QThread):
                         background=self.background,
                         colors=self.colors,
                     )
-        except DisplayError as exc:
+        except (DisplayError, usb.core.USBError) as exc:
             if not self._stop:
                 self.error.emit(str(exc))
         finally:

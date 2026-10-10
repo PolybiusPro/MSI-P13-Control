@@ -447,7 +447,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         mode = self._active_mode or MODE_OFF
-        if self._login_mode is not None and mode == MODE_OFF:
+        if self._login_mode is not None and mode == MODE_OFF and self._login_timer.isActive():
             text = "Waiting for panel, retrying every 10 seconds"
         elif mode == MODE_EXTENDED and self._mirror_running():
             text = "Extended monitor running"
@@ -736,8 +736,8 @@ class MainWindow(QMainWindow):
         """Keep the saved mode and try again; the panel may not have enumerated yet."""
         self._active_mode = MODE_OFF
         self._login_action_worker = None
-        self._refresh_mode_status()
         self._login_timer.start()
+        self._refresh_mode_status()
 
     def _login_failed_async(self, title: str, msg: str) -> None:
         """Async failure while logging in: notify once per streak, then retry."""
@@ -752,6 +752,8 @@ class MainWindow(QMainWindow):
         self._apply_mode(self._login_mode, login=True)
 
     def _apply_mode(self, mode: str, *, login: bool = False) -> None:
+        if self._closing:
+            return
         if login:
             self._login_mode = mode
             self._login_quiet = self._login_notified
@@ -882,13 +884,13 @@ class MainWindow(QMainWindow):
         self._refresh_mode_status()
 
     def _persist_layout_now(self) -> bool:
-        output = find_connected_virtual_output()
-        if output is None:
-            return False
         try:
+            output = find_connected_virtual_output()
+            if output is None:
+                return False
             save_display_config(virtual_output=output)
             return True
-        except DisplayError as exc:
+        except Exception as exc:  # noqa: BLE001 - kscreen-doctor timeouts, bad JSON, DisplayError
             _LOGGER.warning("could not save layout: %s", exc)
             return False
 
@@ -1151,7 +1153,10 @@ class MainWindow(QMainWindow):
         if self._quit_done:
             return
         self._quit_done = True
-        self.shutdown()
+        try:
+            self.shutdown()
+        except Exception:  # noqa: BLE001 - still attempt to blank the panel
+            _LOGGER.warning("shutdown failed during quit", exc_info=True)
         try:
             wait_for_display_usb()
             send_black_image()

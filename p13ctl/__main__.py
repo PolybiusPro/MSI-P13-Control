@@ -392,7 +392,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_br.add_argument(
         "--no-save",
         action="store_true",
-        help="Do not persist the value (for sleep/shutdown hooks)",
+        help="Set the brightness without saving it as the panel's stored brightness",
     )
     p_br.set_defaults(func=cmd_hid_brightness)
     p_rot = hid_sub.add_parser("rotate", help="Set panel rotation")

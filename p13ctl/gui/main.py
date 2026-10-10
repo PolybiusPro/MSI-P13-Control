@@ -32,6 +32,21 @@ def _noop() -> None:
     """Timer target: waking the Qt loop lets Python run its signal handlers."""
 
 
+def _install_signal_handlers(window: MainWindow) -> None:
+    """Route SIGTERM/SIGINT to the quit path, deferred to the Qt event loop.
+
+    Running the quit path inside the signal handler would nest it in whatever
+    Python code was interrupted (a mode switch, a USB wait), which could then
+    resume and start a worker after the panel was blanked.
+    """
+
+    def _handler(_signum: int, _frame: object) -> None:
+        QTimer.singleShot(0, window.request_quit)
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(sys.argv[1:] if argv is None else argv)
     logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -59,8 +74,7 @@ def main(argv: list[str] | None = None) -> int:
     guard.show_requested.connect(window.show_and_raise)
 
     # SIGTERM from the session manager runs the same quit path as the tray.
-    signal.signal(signal.SIGTERM, lambda *_: window.request_quit())
-    signal.signal(signal.SIGINT, lambda *_: window.request_quit())
+    _install_signal_handlers(window)
     pump = QTimer()
     pump.timeout.connect(_noop)
     pump.start(250)

@@ -363,6 +363,7 @@ remove_legacy_services() {
       echo "==> Removing legacy $name"
       systemctl --user disable --now "$name" 2>/dev/null || true
       rm -f "$unit_dir/$name"
+      rm -f "$unit_dir/graphical-session.target.wants/$name"
     fi
   done
   if [[ "$found" == "1" ]]; then
@@ -506,5 +507,8 @@ Options:
   $0 --no-evdi
   $0 --blacklist-aic
   $ROOT/uninstall.sh
+
+Upgrading from the old service install? The legacy p13-display and p13-panel-off
+services were stopped. Start p13ctl-gui now (or log out and in) to drive the panel.
 
 EOF

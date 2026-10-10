@@ -70,7 +70,8 @@ Behaviour notes:
 - If the panel is not yet enumerated at login, the app retries every 10 seconds ("Waiting for panel, retrying every 10 seconds") without overwriting the saved mode. Picking a different mode cancels the retry.
 - Sysmon, clock, image, and test modes no longer blank when the desktop displays sleep. Extended mode still follows DPMS through EVDI.
 - There is no logind shutdown delay lock. Blanking at shutdown depends on the app handling SIGTERM in time; otherwise the panel keeps its last frame.
-- One-shot CLI commands report "USB busy" while the app is running.
+- One-shot CLI commands report "Display USB interface is busy" while the app is running.
+- A runtime failure of a mode you picked manually (for example the panel unplugged for longer than the reconnect window) saves Display Mode = off, so the next login starts with the panel dark. Only the login-time failure path keeps the saved mode and retries.
 
 `p13ctl display desktop` creates a 480×480 extended monitor that can be arranged in your desktop settings. Use `p13ctl display desktop --capture` to mirror an existing screen without EVDI.
 

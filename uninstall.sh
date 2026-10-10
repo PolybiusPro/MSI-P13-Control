@@ -174,6 +174,7 @@ remove_legacy_services() {
       echo "==> Removing legacy $name"
       systemctl --user disable --now "$name" 2>/dev/null || true
       rm -f "$unit_dir/$name"
+      rm -f "$unit_dir/graphical-session.target.wants/$name"
     fi
   done
   if [[ "$found" == "1" ]]; then
