@@ -12,7 +12,7 @@ DO_EVDI=1
 DO_CONFIG=0
 DO_BLACKLIST=0
 DO_PACKAGES=0
-DO_BOOT_DISPLAY=1
+DO_AUTOSTART=1
 DO_GUI=1
 
 die() { echo "error: $*" >&2; exit 1; }
@@ -33,7 +33,7 @@ Options:
   --keep-evdi         Leave EVDI kernel module and boot config in place
   --keep-udev         Leave udev rules in place
   --keep-python       Leave .venv in place
-  --keep-boot-display Leave p13-display.service user unit in place
+  --keep-autostart  Leave the GUI login autostart entry in place
   --keep-gui            Leave GUI desktop launcher in place
   -h, --help          Show this help
 
@@ -53,7 +53,7 @@ while [[ $# -gt 0 ]]; do
     --keep-evdi) DO_EVDI=0; shift ;;
     --keep-udev) DO_UDEV=0; shift ;;
     --keep-python) DO_PYTHON=0; shift ;;
-    --keep-boot-display) DO_BOOT_DISPLAY=0; shift ;;
+    --keep-autostart) DO_AUTOSTART=0; shift ;;
     --keep-gui) DO_GUI=0; shift ;;
     -h|--help) usage; exit 0 ;;
     *) die "unknown option: $1 (try --help)" ;;
@@ -165,20 +165,29 @@ remove_config() {
   fi
 }
 
-remove_boot_display() {
+remove_legacy_services() {
   local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-  local name
+  local name found=0
   for name in p13-display.service p13-panel-off.service; do
-    if systemctl --user is-enabled "$name" &>/dev/null; then
-      echo "==> Disabling $name"
-      systemctl --user disable --now "$name" 2>/dev/null || true
-    fi
     if [[ -f "$unit_dir/$name" ]]; then
+      found=1
+      echo "==> Removing legacy $name"
+      systemctl --user disable --now "$name" 2>/dev/null || true
       rm -f "$unit_dir/$name"
-      echo "    removed $unit_dir/$name"
     fi
   done
-  systemctl --user daemon-reload 2>/dev/null || true
+  if [[ "$found" == "1" ]]; then
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+}
+
+remove_autostart() {
+  local entry="${XDG_CONFIG_HOME:-$HOME/.config}/autostart/p13ctl-gui.desktop"
+  if [[ -f "$entry" ]]; then
+    echo "==> Removing GUI login autostart"
+    rm -f "$entry"
+    echo "    removed $entry"
+  fi
 }
 
 remove_gui_desktop() {
@@ -218,8 +227,10 @@ if [[ "$DO_PYTHON" == "1" ]]; then
   remove_python
 fi
 
-if [[ "$DO_BOOT_DISPLAY" == "1" ]]; then
-  remove_boot_display
+remove_legacy_services
+
+if [[ "$DO_AUTOSTART" == "1" ]]; then
+  remove_autostart
 fi
 
 if [[ "$DO_GUI" == "1" ]]; then
@@ -241,7 +252,7 @@ $( [[ "$DO_EVDI" == "1" ]] && echo "  - EVDI module/config" )
 $( [[ "$DO_PACKAGES" == "1" ]] && echo "  - displaylink/evdi-dkms packages" )
 $( [[ "$DO_CONFIG" == "1" ]] && echo "  - ~/.config/p13ctl" )
 $( [[ "$DO_BLACKLIST" == "1" ]] && echo "  - aic_usb_display blacklist" )
-$( [[ "$DO_BOOT_DISPLAY" == "1" ]] && echo "  - p13-display.service / p13-panel-off.service (login display, logout panel off)" )
+$( [[ "$DO_AUTOSTART" == "1" ]] && echo "  - p13ctl-gui login autostart entry" )
 $( [[ "$DO_GUI" == "1" ]] && echo "  - p13ctl-gui desktop launcher" )
 
 System packages (python3, libusb, dkms, etc.) were left installed.

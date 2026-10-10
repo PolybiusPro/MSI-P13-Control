@@ -12,7 +12,7 @@ DO_UDEV=1
 DO_PYTHON=1
 DO_BLACKLIST=0
 WITH_DESKTOP=1
-DO_BOOT_DISPLAY=1
+DO_AUTOSTART=1
 WITH_GUI=1
 
 DISPLAYLINK_TAG="v6.3.0-1"
@@ -24,7 +24,7 @@ usage() {
   cat <<EOF
 Usage: $0 [options]
 
-Install p13ctl, EVDI extended-monitor support, udev rules, and user services.
+Install p13ctl, EVDI extended-monitor support, udev rules, and the GUI login autostart.
 
 Options:
   --evdi-only       Install only EVDI (kernel module, boot load, libevdi)
@@ -33,7 +33,7 @@ Options:
   --no-udev         Skip udev rules
   --no-python       Skip virtualenv and pip install
   --no-desktop      Skip desktop capture dependencies
-  --no-boot-display Do not start p13ctl display desktop at login
+  --no-autostart    Do not start the GUI in the tray at login
   --no-gui            Skip GUI (PySide6) and desktop launcher
   --blacklist-aic   Blacklist aic_usb_display kernel driver
   -h, --help        Show this help
@@ -58,8 +58,8 @@ while [[ $# -gt 0 ]]; do
     --no-system-deps) DO_SYSTEM_DEPS=0; shift ;;
     --no-udev) DO_UDEV=0; shift ;;
     --no-python) DO_PYTHON=0; shift ;;
-    --no-desktop) WITH_DESKTOP=0; DO_BOOT_DISPLAY=0; shift ;;
-    --no-boot-display) DO_BOOT_DISPLAY=0; shift ;;
+    --no-desktop) WITH_DESKTOP=0; shift ;;
+    --no-autostart) DO_AUTOSTART=0; shift ;;
     --no-gui) WITH_GUI=0; shift ;;
     --blacklist-aic) DO_BLACKLIST=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -354,31 +354,34 @@ install_udev() {
   echo "    Added /etc/udev/rules.d/99-msi-p13.rules"
 }
 
-install_boot_display() {
-  echo "==> Enabling P13 display at login"
+remove_legacy_services() {
   local unit_dir="${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user"
-  local p13ctl_bin="$VENV/bin/p13ctl"
-  if [[ ! -x "$p13ctl_bin" ]]; then
-    echo "    warning: $p13ctl_bin not found — skipping boot display service"
+  local name found=0
+  for name in p13-display.service p13-panel-off.service; do
+    if [[ -f "$unit_dir/$name" ]]; then
+      found=1
+      echo "==> Removing legacy $name"
+      systemctl --user disable --now "$name" 2>/dev/null || true
+      rm -f "$unit_dir/$name"
+    fi
+  done
+  if [[ "$found" == "1" ]]; then
+    systemctl --user daemon-reload 2>/dev/null || true
+  fi
+}
+
+install_autostart() {
+  echo "==> Enabling P13 GUI at login"
+  local autostart_dir="${XDG_CONFIG_HOME:-$HOME/.config}/autostart"
+  local gui_bin="$VENV/bin/p13ctl-gui"
+  if [[ ! -x "$gui_bin" ]]; then
+    echo "    warning: $gui_bin not found, skipping login autostart"
     return 0
   fi
-  mkdir -p "$unit_dir"
-  sed -e "s|@ROOT@|$ROOT|g" -e "s|@P13CTL_BIN@|$p13ctl_bin|g" \
-    "$LINUX/p13-display.service.in" > "$unit_dir/p13-display.service"
-  sed -e "s|@ROOT@|$ROOT|g" -e "s|@P13CTL_BIN@|$p13ctl_bin|g" \
-    "$LINUX/p13-panel-off.service.in" > "$unit_dir/p13-panel-off.service"
-  if systemctl --user daemon-reload 2>/dev/null; then
-    systemctl --user enable p13-display.service p13-panel-off.service
-    echo "    Enabled p13-display.service (starts at graphical login)"
-    echo "    Enabled p13-panel-off.service (panel blanking on display sleep, logout, shutdown)"
-    if systemctl --user is-active --quiet graphical-session.target 2>/dev/null; then
-      systemctl --user start p13-panel-off.service 2>/dev/null || true
-      systemctl --user start p13-display.service 2>/dev/null || true
-    fi
-  else
-    echo "    Wrote $unit_dir/p13-display.service and p13-panel-off.service"
-    echo "    Run after login: systemctl --user daemon-reload && systemctl --user enable --now p13-display.service p13-panel-off.service"
-  fi
+  mkdir -p "$autostart_dir"
+  sed -e "s|@P13CTL_GUI_BIN@|$gui_bin|g" \
+    "$LINUX/p13ctl-gui-autostart.desktop.in" > "$autostart_dir/p13ctl-gui.desktop"
+  echo "    Added $autostart_dir/p13ctl-gui.desktop"
 }
 
 install_gui_desktop() {
@@ -442,8 +445,12 @@ if [[ "$DO_PYTHON" == "1" ]]; then
   install_python
 fi
 
-if [[ "$DO_PYTHON" == "1" && "$DO_BOOT_DISPLAY" == "1" && "$WITH_DESKTOP" == "1" ]]; then
-  install_boot_display
+if [[ "$DO_PYTHON" == "1" ]]; then
+  remove_legacy_services
+fi
+
+if [[ "$DO_PYTHON" == "1" && "$WITH_GUI" == "1" && "$DO_AUTOSTART" == "1" ]]; then
+  install_autostart
 fi
 
 if [[ "$DO_PYTHON" == "1" && "$WITH_GUI" == "1" ]]; then
@@ -488,9 +495,9 @@ Try:
   p13ctl display desktop --capture
   p13ctl sysmon
 
-Login: p13-display.service applies the saved Display Mode in the user session.
+Login: p13ctl-gui starts in the system tray and applies the saved Display Mode.
+Closing the window hides it; Quit from the tray menu stops the panel.
 Extended monitor mode uses EVDI; add --capture to mirror an existing display instead.
-Logout/restart: p13-panel-off.service sends a black image before the session exits.
 
 Re-plug the P13 USB cable after udev rule install.
 

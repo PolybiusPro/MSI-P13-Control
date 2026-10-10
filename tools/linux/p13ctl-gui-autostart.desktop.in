@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=MSI P13 Control
+Comment=Drive the MSI P13 panel from the system tray at login
+Exec=@P13CTL_GUI_BIN@ --minimized
+Icon=computer
+Terminal=false
+X-GNOME-Autostart-enabled=true
