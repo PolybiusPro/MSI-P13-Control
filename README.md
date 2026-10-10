@@ -14,7 +14,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
 | Leave firmware splash (HID)     | **Implemented**      | Auto on display connect; or `p13ctl hid host on`               |
 | Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/` |
-| Boot auto-start | **Implemented** | `p13-display.service` applies saved Display Mode at login |
+| Login auto-start | **Implemented** | `p13ctl-gui --minimized` starts in the tray and applies the saved Display Mode |
 | GUI control panel               | **Implemented**      | `p13ctl-gui` — display mode toggle and layout reset            |
 | Pump / radiator fans            | **Motherboard PWM**  | Use BIOS/fancontrol — not USB-controlled on P13                |
 | ARGB lighting                   | **Motherboard ARGB** | Use OpenRGB / motherboard software — not USB-controlled        |
@@ -41,19 +41,19 @@ p13ctl display desktop
 p13ctl-gui
 ```
 
-`install.sh` installs EVDI, system dependencies, udev access rules, and `p13ctl` into a local virtualenv. `p13-display.service` starts the saved **Display Mode** at graphical login, while `p13-panel-off.service` sends a solid black image during logout, shutdown, or restart. For shutdown and restart it holds a systemd-logind delay lock (the same mechanism desktop apps use for pre-shutdown cleanup), so the machine waits until the panel is blank.
+`install.sh` installs EVDI, system dependencies, udev access rules, and `p13ctl` into a local virtualenv, and adds an XDG autostart entry that starts `p13ctl-gui --minimized` at login. The GUI owns the panel: closing the window hides it to the system tray and the panel keeps running, and **Quit** in the tray menu blanks the panel and exits. If no system tray is available, closing the window quits the app instead. Older installs that used `p13-display.service` and `p13-panel-off.service` are cleaned up automatically.
 
 ```bash
-./install.sh --no-boot-display   # skip login autostart
+./install.sh --no-autostart       # skip login autostart
 ./install.sh --no-gui            # skip GUI / PySide6
 ./install.sh --no-evdi           # omit extended-monitor support
-systemctl --user status p13-display.service
 p13ctl-gui
 ```
 
 ```bash
 ./uninstall.sh                  # remove p13ctl artifacts
 ./uninstall.sh --remove-config  # also delete saved display settings
+./uninstall.sh --keep-autostart # keep the login autostart entry
 ```
 
 If the Artinchip kernel driver (`aic_usb_display`) conflicts with userspace access:
@@ -63,6 +63,14 @@ If the Artinchip kernel driver (`aic_usb_display`) conflicts with userspace acce
 ```
 
 See [docs/protocol-display.md](docs/protocol-display.md) for details.
+
+Behaviour notes:
+
+- The panel is only driven while the app runs. Headless and `--no-gui` installs have no boot autostart.
+- If the panel is not yet enumerated at login, the app retries every 10 seconds ("Waiting for panel, retrying every 10 seconds") without overwriting the saved mode. Picking a different mode cancels the retry.
+- Sysmon, clock, image, and test modes no longer blank when the desktop displays sleep. Extended mode still follows DPMS through EVDI.
+- There is no logind shutdown delay lock. Blanking at shutdown depends on the app handling SIGTERM in time; otherwise the panel keeps its last frame.
+- One-shot CLI commands report "USB busy" while the app is running.
 
 `p13ctl display desktop` creates a 480×480 extended monitor that can be arranged in your desktop settings. Use `p13ctl display desktop --capture` to mirror an existing screen without EVDI.
 
@@ -84,7 +92,7 @@ tools/
 ├── linux/               systemd, udev, EVDI, dracut, and desktop integration
 └── windows/             Windows research notes
 docs/                       Architecture, protocol, and reverse-engineering notes
-tests/                      Protocol, display-mode, rendering, and service tests
+tests/                      Protocol, display-mode, rendering, and GUI tests
 install.sh                  Linux installer
 uninstall.sh                Linux uninstaller
 pyproject.toml              Python package metadata and dependencies
