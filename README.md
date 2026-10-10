@@ -13,7 +13,7 @@ The P13 is **not** the same device family as the older [MSI MPG Coreliquid K360]
 | System monitor on LCD           | **Implemented**      | Five software-rendered styles (`p13ctl sysmon --style 1..5`)   |
 | Brightness / rotation (HID)     | **Implemented**      | `p13ctl hid brightness` / `p13ctl hid rotate`                  |
 | Leave firmware splash (HID)     | **Implemented**      | Auto on display connect; or `p13ctl hid host on`               |
-| Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/` |
+| Display layout persistence      | **Implemented**      | Position, orientation, brightness, and Display Mode in `~/.config/p13ctl/display.ini` (an existing `display-layout.json` is read once and superseded on the next save) |
 | Login auto-start | **Implemented** | `p13ctl-gui --minimized` starts in the tray and applies the saved Display Mode |
 | GUI control panel               | **Implemented**      | `p13ctl-gui` — display mode toggle and layout reset            |
 | Pump / radiator fans            | **Motherboard PWM**  | Use BIOS/fancontrol — not USB-controlled on P13                |

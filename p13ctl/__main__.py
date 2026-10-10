@@ -313,7 +313,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_dd.add_argument(
         "--no-save-layout",
         action="store_true",
-        help="do not save settings to ~/.config/p13ctl/display-layout.json",
+        help="do not save settings to ~/.config/p13ctl/display.ini",
     )
     p_dd.add_argument(
         "--reset-layout",
