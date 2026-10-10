@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import subprocess
 from pathlib import Path
 
 from PIL import Image
@@ -57,12 +56,6 @@ from p13ctl.display.mode import (
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
 from p13ctl.hid.msi_p13 import P13HidController
 
-from .service import (
-    mirror_is_running,
-    mirror_service_installed,
-    start_mirror_service,
-    stop_mirror_service,
-)
 from .workers import FaceWorker, MirrorWorker, TaskWorker
 
 _LOGGER = logging.getLogger(__name__)
@@ -414,19 +407,7 @@ class MainWindow(QMainWindow):
         self._sync_combo_from_runtime()
         self._refresh_mode_status()
 
-    def _service_running(self) -> bool:
-        return mirror_service_installed() and mirror_is_running()
-
-    def _service_display_mode(self) -> str | None:
-        """Mode hosted by p13-display.service (it runs the saved mode), if active."""
-        if not self._service_running():
-            return None
-        name = get_saved_mode()["name"]
-        return name if name in (MODE_EXTENDED, MODE_SYSMON, MODE_CLOCK) else None
-
     def _mirror_running(self) -> bool:
-        if self._service_running():
-            return self._service_display_mode() == MODE_EXTENDED
         return self._worker_alive(self._mirror_worker)
 
     def _face_worker_mode(self) -> str:
@@ -434,16 +415,11 @@ class MainWindow(QMainWindow):
         return MODE_CLOCK if worker is not None and worker.face == "clock" else MODE_SYSMON
 
     def _sync_combo_from_runtime(self) -> None:
-        """If an external service is already running, reflect that in the combo."""
+        """Reflect an already-running face worker in the combo."""
         if self._closing or self._updating_mode:
             return
-        service_mode = self._service_display_mode()
-        if service_mode is not None and self._active_mode != service_mode:
-            self._active_mode = service_mode
-            self._set_combo_mode(service_mode)
-        elif (
-            service_mode is None
-            and self._worker_alive(self._sysmon_worker)
+        if (
+            self._worker_alive(self._sysmon_worker)
             and self._active_mode != self._face_worker_mode()
         ):
             self._active_mode = self._face_worker_mode()
@@ -455,13 +431,9 @@ class MainWindow(QMainWindow):
         mode = self._active_mode or MODE_OFF
         if mode == MODE_EXTENDED and self._mirror_running():
             text = "Extended monitor running"
-        elif mode == MODE_SYSMON and (
-            self._service_display_mode() == MODE_SYSMON or self._worker_alive(self._sysmon_worker)
-        ):
+        elif mode == MODE_SYSMON and self._worker_alive(self._sysmon_worker):
             text = f"System monitor running (style {self._selected_sysmon_style()})"
-        elif mode == MODE_CLOCK and (
-            self._service_display_mode() == MODE_CLOCK or self._worker_alive(self._sysmon_worker)
-        ):
+        elif mode == MODE_CLOCK and self._worker_alive(self._sysmon_worker):
             text = f"Clock running (style {self._selected_clock_style()})"
         elif mode == MODE_TEST:
             text = "Test pattern on panel"
@@ -723,23 +695,12 @@ class MainWindow(QMainWindow):
             _LOGGER.warning("could not save display mode: %s", exc)
 
     def _maybe_apply_saved_mode(self) -> None:
-        """Apply the saved mode if nothing is already driving the panel."""
+        """Apply the saved mode at startup."""
         if self._closing:
             return
         saved = get_saved_mode()["name"]
-        service_mode = self._service_display_mode()
-        if service_mode is not None:
-            self._active_mode = service_mode
-            self._set_combo_mode(service_mode)
-            self._refresh_mode_status()
-            return
-        if self._worker_alive(self._sysmon_worker):
-            self._active_mode = self._face_worker_mode()
-            self._set_combo_mode(self._active_mode)
-            self._refresh_mode_status()
-            return
-        if saved == MODE_OFF or saved == self._active_mode:
-            self._active_mode = saved
+        if saved == MODE_OFF:
+            self._active_mode = MODE_OFF
             self._refresh_mode_status()
             return
         self._apply_mode(saved)
@@ -787,7 +748,7 @@ class MainWindow(QMainWindow):
         self._refresh_mode_status()
 
     def _stop_current_mode(self, *, save_layout: bool) -> None:
-        if self._service_running() or self._worker_alive(self._mirror_worker):
+        if self._worker_alive(self._mirror_worker):
             self._stop_extended(save_layout=save_layout)
         if self._worker_alive(self._sysmon_worker):
             assert self._sysmon_worker is not None
@@ -811,20 +772,8 @@ class MainWindow(QMainWindow):
     def _start_extended(self) -> bool:
         if self._mirror_running():
             return True
-        # Persist before starting the login service so it runs the right mode.
-        self._persist_mode(MODE_EXTENDED)
         if not self._release_usb_for_static():
             return False
-        if mirror_service_installed():
-            try:
-                start_mirror_service()
-            except subprocess.CalledProcessError as exc:
-                detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not start extended monitor", detail)
-                return False
-            self._status.showMessage("Extended monitor started", 3000)
-            return True
-
         stream = self._stream_values()
         self._mirror_worker = MirrorWorker(
             fps=stream["fps"],
@@ -839,22 +788,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _stop_extended(self, *, save_layout: bool) -> None:
-        if mirror_service_installed() and mirror_is_running():
-            if save_layout and self._persist_layout_now():
-                self._status.showMessage("Layout saved", 2000)
-            try:
-                stop_mirror_service()
-            except subprocess.CalledProcessError as exc:
-                detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error("Could not stop extended monitor", detail)
-                return
-        elif self._worker_alive(self._mirror_worker):
-            if save_layout and self._persist_layout_now():
-                self._status.showMessage("Layout saved", 2000)
-            assert self._mirror_worker is not None
-            self._mirror_worker.request_stop()
-            self._mirror_worker.wait(8000)
-            self._mirror_worker = None
+        if not self._worker_alive(self._mirror_worker):
+            return
+        if save_layout and self._persist_layout_now():
+            self._status.showMessage("Layout saved", 2000)
+        assert self._mirror_worker is not None
+        self._mirror_worker.request_stop()
+        self._mirror_worker.wait(8000)
+        self._mirror_worker = None
 
     def _on_mirror_error(self, msg: str) -> None:
         self._active_mode = MODE_OFF
@@ -902,8 +843,8 @@ class MainWindow(QMainWindow):
             self._sysmon_worker.request_stop()
             self._sysmon_worker.wait(wait_ms)
             self._sysmon_worker = None
-        if self._service_running() or self._worker_alive(self._mirror_worker):
-            self._stop_extended(save_layout=self._mirror_running() or self._worker_alive(self._mirror_worker))
+        if self._worker_alive(self._mirror_worker):
+            self._stop_extended(save_layout=True)
 
     def _blank_display(self) -> bool:
         """Off mode: stop streams and set brightness to 0 over HID."""
@@ -990,27 +931,6 @@ class MainWindow(QMainWindow):
         message = f"{label} started"
         if not self._release_usb_for_static():
             return False
-        if mirror_service_installed():
-            # Persist first, then let the login service host the face so it
-            # keeps running after the GUI closes (same pattern as extended).
-            mode = MODE_CLOCK if face == "clock" else MODE_SYSMON
-            self._persist_mode(
-                mode,
-                style=self._selected_clock_style() if mode == MODE_CLOCK else None,
-                monitor_style=self._selected_sysmon_style() if mode == MODE_SYSMON else None,
-                switch=self._selected_switch() if mode == MODE_SYSMON else None,
-                items=self._checked_stat_keys() if mode == MODE_SYSMON else None,
-                background=(self._face_background or "") if mode in (MODE_SYSMON, MODE_CLOCK) else None,
-                colors=dict(self._face_colors) if mode in (MODE_SYSMON, MODE_CLOCK) else None,
-            )
-            try:
-                start_mirror_service()
-            except subprocess.CalledProcessError as exc:
-                detail = (exc.stderr or exc.stdout or str(exc)).strip()
-                self._show_error(f"Could not start {label.lower()}", detail)
-                return False
-            self._status.showMessage(message, 3000)
-            return True
         stream = self._stream_values()
         self._sysmon_worker = FaceWorker(
             rotate=stream["rotate"],
@@ -1114,8 +1034,7 @@ class MainWindow(QMainWindow):
         except Exception:  # noqa: BLE001
             pass
         stop_active_sessions()
-        # In-process workers die with the GUI; the p13-display service
-        # (extended/sysmon/clock) is left running so the panel persists.
+        # Stop in-process workers before the process exits.
         if self._worker_alive(self._sysmon_worker):
             assert self._sysmon_worker is not None
             self._sysmon_worker.request_stop()

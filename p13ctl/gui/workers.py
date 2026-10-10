@@ -34,7 +34,7 @@ class TaskWorker(QThread):
             self.finished_ok.emit(result)
 
 class MirrorWorker(QThread):
-    """Run the EVDI extended-display loop when no service is active."""
+    """Run the EVDI extended-display loop."""
 
     error = Signal(str)
     stopped = Signal()
