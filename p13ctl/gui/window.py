@@ -6,9 +6,10 @@ import logging
 from pathlib import Path
 
 from PIL import Image
-from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer
+from PySide6.QtCore import QStandardPaths, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QColorDialog,
     QComboBox,
@@ -24,6 +25,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QSlider,
     QStatusBar,
+    QSystemTrayIcon,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -51,6 +53,7 @@ from p13ctl.display.mode import (
     MODE_SYSMON,
     MODE_TEST,
     get_saved_mode,
+    send_black_image,
     update_saved_mode,
 )
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
@@ -64,6 +67,9 @@ PANEL_SIZE = (480, 480)
 ROTATIONS = (0, 90, 180, 270)
 
 class MainWindow(QMainWindow):
+    notify = Signal(str, str)
+    mode_text_changed = Signal(str)
+
     def __init__(self) -> None:
         super().__init__()
         self.setWindowTitle("MSI P13 Control")
@@ -74,6 +80,7 @@ class MainWindow(QMainWindow):
         self._action_worker: TaskWorker | None = None
         self._workers: list[QThread] = []
         self._closing = False
+        self._quit_done = False
         self._updating_mode = False
         self._updating_rotation = False
         self._updating_brightness = False
@@ -445,6 +452,7 @@ class MainWindow(QMainWindow):
         else:
             text = "Off (brightness 0)"
         self._mode_status.setText(text)
+        self.mode_text_changed.emit(text)
         self._update_mode_widgets(self._selected_mode())
 
     def _on_mode_combo_changed(self, _index: int) -> None:
@@ -1023,7 +1031,10 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         _LOGGER.error("%s: %s", title, message)
-        QMessageBox.critical(self, title, message)
+        if self.isVisible():
+            QMessageBox.critical(self, title, message)
+        else:
+            self.notify.emit(title, message)
 
     def shutdown(self) -> None:
         if self._closing:
@@ -1057,6 +1068,32 @@ class MainWindow(QMainWindow):
         self._action_worker = None
         self._active_mode = MODE_OFF
 
-    def closeEvent(self, event) -> None:  # noqa: N802
+    def show_and_raise(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+
+    def quit_app(self) -> None:
+        """Stop the workers, blank the panel, and leave the app ready to exit."""
+        if self._quit_done:
+            return
+        self._quit_done = True
         self.shutdown()
+        try:
+            wait_for_display_usb()
+            send_black_image()
+        except DisplayError as exc:
+            _LOGGER.warning("could not blank panel on quit: %s", exc)
+
+    def request_quit(self) -> None:
+        self.quit_app()
+        QApplication.quit()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            event.ignore()
+            self.hide()
+            return
+        # No tray to restore the window from: closing the window quits the app.
+        self.request_quit()
         super().closeEvent(event)
