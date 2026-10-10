@@ -3,7 +3,7 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from p13ctl import __main__ as cli
-from p13ctl.display import mode, virtual_monitor
+from p13ctl.display import virtual_monitor
 
 def _desktop_args(**overrides):
     values = {
@@ -68,28 +68,3 @@ def test_desktop_capture_remains_an_explicit_fallback(monkeypatch) -> None:
     assert calls == [
         {"interval": 0.05, "monitor": 0, "crop": "center", "quality": 70}
     ]
-
-def test_saved_extended_mode_uses_evdi(monkeypatch) -> None:
-    called = {}
-    monkeypatch.setattr(mode, "get_saved_mode", lambda: {"name": mode.MODE_EXTENDED})
-    monkeypatch.setattr(
-        mode,
-        "_stream",
-        lambda: {"fps": 30, "quality": 80, "rotate": 180},
-    )
-    monkeypatch.setattr(mode, "restore_saved_brightness", lambda: None)
-    monkeypatch.setattr(
-        virtual_monitor,
-        "run_virtual_monitor",
-        lambda **kwargs: called.update(kwargs),
-    )
-
-    assert mode.run_saved_display_mode() == 0
-    assert called == {
-        "fps": 30,
-        "quality": 80,
-        "rotate": 180,
-        "configure": True,
-        "save_layout": True,
-        "reset_layout": False,
-    }

@@ -1,10 +1,8 @@
-"""Saved Display Mode for login autostart and the GUI."""
+"""Saved Display Mode persistence for the GUI."""
 
 from __future__ import annotations
 
 import logging
-import signal
-import threading
 from pathlib import Path
 from typing import Any
 
@@ -12,13 +10,10 @@ from PIL import Image
 
 from .artinchip import ArtinchipDisplay, DisplayError
 from .layout import (
-    blank_panel_off,
     load_display_config,
     resolve_stream_settings,
-    restore_saved_brightness,
     save_display_config,
 )
-from .service import stop_display_service
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -34,7 +29,6 @@ VALID_MODES = frozenset(
 )
 PANEL_SIZE = (480, 480)
 DEFAULT_MODE = MODE_EXTENDED
-SYSMON_MAX_FPS = 10
 
 def get_saved_mode() -> dict[str, Any]:
     """Return the validated saved display mode and its face options."""
@@ -144,108 +138,6 @@ def _stream() -> dict[str, int]:
 
 def send_black_image() -> None:
     """Send a solid black frame without changing the saved mode or brightness."""
-    stop_display_service()
     stream = _stream()
     with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
         disp.send_image(Image.new("RGB", PANEL_SIZE, (0, 0, 0)))
-
-def run_saved_display_mode() -> int:
-    """Apply the saved Display Mode (used at login by p13-display.service).
-
-    Long-running modes (extended monitor, sysmon, clock) block until stopped.
-    One-shot modes (off, test, image) apply a frame and return.
-    """
-    saved = get_saved_mode()
-    name = saved["name"]
-    stream = _stream()
-    _LOGGER.info("starting saved display mode: %s", name)
-
-    if name == MODE_OFF:
-        try:
-            blank_panel_off()
-            print("Display off (brightness 0).")
-        except DisplayError as exc:
-            print(f"Display error: {exc}", flush=True)
-            return 1
-        return 0
-
-    restore_saved_brightness()
-
-    if name == MODE_TEST:
-        try:
-            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-                disp.show_test_pattern()
-            print("Test pattern sent.")
-        except DisplayError as exc:
-            print(f"Display error: {exc}", flush=True)
-            return 1
-        return 0
-
-    if name == MODE_IMAGE:
-        try:
-            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-                path = saved.get("image")
-                if path:
-                    disp.show_static_file(path)
-                    print(f"Image sent: {path}")
-                else:
-                    disp.send_image(Image.new("RGB", PANEL_SIZE, (0, 0, 0)))
-                    print("Solid black (no image selected yet).")
-        except DisplayError as exc:
-            print(f"Display error: {exc}", flush=True)
-            return 1
-        return 0
-
-    if name == MODE_SYSMON:
-        try:
-            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-                if threading.current_thread() is threading.main_thread():
-                    signal.signal(signal.SIGTERM, lambda *_: disp.request_stop())
-                    signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
-                print("System monitor running (Ctrl+C to stop)...")
-                disp.run_sysmon(
-                    style=saved["monitor_style"],
-                    switch=saved["switch"],
-                    fps=max(1, min(stream["fps"], SYSMON_MAX_FPS)),
-                    quality=stream["quality"],
-                    items=saved["items"],
-                    background=saved["background"],
-                    colors=saved["colors"],
-                )
-        except DisplayError as exc:
-            print(f"Display error: {exc}", flush=True)
-            return 1
-        return 0
-
-    if name == MODE_CLOCK:
-        try:
-            with ArtinchipDisplay(rotate=stream["rotate"]) as disp:
-                if threading.current_thread() is threading.main_thread():
-                    signal.signal(signal.SIGTERM, lambda *_: disp.request_stop())
-                    signal.signal(signal.SIGINT, lambda *_: disp.request_stop())
-                print(f"Clock running (style {saved['style']}, Ctrl+C to stop)...")
-                disp.run_clock(
-                    style=saved["style"],
-                    background=saved["background"],
-                    colors=saved["colors"],
-                )
-        except DisplayError as exc:
-            print(f"Display error: {exc}", flush=True)
-            return 1
-        return 0
-
-    from .virtual_monitor import run_virtual_monitor
-
-    try:
-        run_virtual_monitor(
-            fps=stream["fps"],
-            quality=stream["quality"],
-            rotate=stream["rotate"],
-            configure=True,
-            save_layout=True,
-            reset_layout=False,
-        )
-    except DisplayError as exc:
-        print(f"Display error: {exc}", flush=True)
-        return 1
-    return 0
