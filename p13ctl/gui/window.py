@@ -93,6 +93,8 @@ class MainWindow(QMainWindow):
         self._autostart = autostart
         self._login_mode: str | None = None
         self._login_notified = False
+        self._login_quiet = False
+        self._login_action_worker: TaskWorker | None = None
 
         # Debounce slider drags so each step doesn't open the HID device.
         self._brightness_timer = QTimer(self)
@@ -728,12 +730,21 @@ class MainWindow(QMainWindow):
         self._login_timer.stop()
         self._login_mode = None
         self._login_notified = False
+        self._login_action_worker = None
 
     def _login_failed(self) -> None:
         """Keep the saved mode and try again; the panel may not have enumerated yet."""
         self._active_mode = MODE_OFF
+        self._login_action_worker = None
         self._refresh_mode_status()
         self._login_timer.start()
+
+    def _login_failed_async(self, title: str, msg: str) -> None:
+        """Async failure while logging in: notify once per streak, then retry."""
+        if not self._login_notified:
+            self._login_notified = True
+            self._show_error(title, msg)
+        self._login_failed()
 
     def _retry_login_mode(self) -> None:
         if self._closing or self._login_mode is None:
@@ -743,8 +754,15 @@ class MainWindow(QMainWindow):
     def _apply_mode(self, mode: str, *, login: bool = False) -> None:
         if login:
             self._login_mode = mode
+            self._login_quiet = self._login_notified
         else:
             self._cancel_login_retry()
+        try:
+            self._apply_mode_body(mode, login=login)
+        finally:
+            self._login_quiet = False
+
+    def _apply_mode_body(self, mode: str, *, login: bool) -> None:
         previous = self._active_mode
         self._stop_current_mode(save_layout=previous == MODE_EXTENDED)
         if mode == MODE_OFF:
@@ -768,6 +786,7 @@ class MainWindow(QMainWindow):
             ok = self._start_clock()
         if not ok:
             if self._login_mode is not None:
+                self._login_notified = True
                 self._login_failed()
                 return
             self._blank_display()
@@ -777,6 +796,10 @@ class MainWindow(QMainWindow):
             self._refresh_mode_status()
             return
         self._active_mode = mode
+        if login:
+            self._login_action_worker = (
+                self._action_worker if mode in (MODE_TEST, MODE_IMAGE) else None
+            )
         self._persist_mode(
             mode,
             image=self._image_path if mode == MODE_IMAGE else None,
@@ -841,8 +864,7 @@ class MainWindow(QMainWindow):
 
     def _on_mirror_error(self, msg: str) -> None:
         if self._login_mode is not None:
-            self._show_error("Extended monitor failed", msg)
-            self._login_failed()
+            self._login_failed_async("Extended monitor failed", msg)
             return
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
@@ -1006,8 +1028,7 @@ class MainWindow(QMainWindow):
         if self._stale_face_signal():
             return
         if self._login_mode is not None:
-            self._show_error("System monitor failed", msg)
-            self._login_failed()
+            self._login_failed_async("System monitor failed", msg)
             return
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
@@ -1058,14 +1079,17 @@ class MainWindow(QMainWindow):
         worker.start()
 
     def _on_action_ok(self, _result: object) -> None:
+        worker = self._login_action_worker
+        if worker is not None and self.sender() is worker:
+            self._cancel_login_retry()
         if not self._closing:
             self._status.showMessage(getattr(self, "_pending_action_message", "Done"), 5000)
             self._refresh_mode_status()
 
     def _on_action_err(self, msg: str) -> None:
-        if self._login_mode is not None:
-            self._show_error("Action failed", msg)
-            self._login_failed()
+        worker = self._login_action_worker
+        if self._login_mode is not None and worker is not None and self.sender() is worker:
+            self._login_failed_async("Action failed", msg)
             return
         self._show_error("Action failed", msg)
         self._refresh_mode_status()
@@ -1077,10 +1101,8 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         _LOGGER.error("%s: %s", title, message)
-        if self._login_mode is not None:
-            if self._login_notified:
-                return
-            self._login_notified = True
+        if self._login_quiet:
+            return
         if self.isVisible():
             QMessageBox.critical(self, title, message)
         else:

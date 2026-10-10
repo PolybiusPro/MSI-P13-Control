@@ -6,6 +6,7 @@ from PySide6.QtWidgets import QMessageBox, QSystemTrayIcon
 
 from p13ctl.display.artinchip import DisplayError
 from p13ctl.gui import window as win
+from p13ctl.gui import workers as win_workers
 
 
 def test_window_has_no_service_helpers(make_window) -> None:
@@ -169,18 +170,58 @@ def test_login_async_error_retries_without_persisting_off(make_window, monkeypat
     assert starts == [1, 1]
 
 
-def test_login_failure_notifies_once(make_window, monkeypatch) -> None:
+def test_login_failure_notifies_once_across_retries(make_window, monkeypatch) -> None:
+    window, persisted = make_window("sysmon", autostart=True)
+
+    def _fail() -> bool:
+        window._show_error("Display busy", "not found")
+        return False
+
+    monkeypatch.setattr(window, "_start_sysmon", _fail)
+    got: list[tuple[str, str]] = []
+    window.notify.connect(lambda t, m: got.append((t, m)))
+
+    window._maybe_apply_saved_mode()
+    for _ in range(3):
+        window._login_timer.timeout.emit()
+
+    assert len(got) == 1
+    assert "off" not in persisted
+
+
+def test_show_error_not_swallowed_after_login_streak(make_window, monkeypatch) -> None:
     window, _ = make_window("sysmon", autostart=True)
-    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+
+    def _fail() -> bool:
+        window._show_error("Display busy", "not found")
+        return False
+
+    monkeypatch.setattr(window, "_start_sysmon", _fail)
+    got: list[tuple[str, str]] = []
+    window.notify.connect(lambda t, m: got.append((t, m)))
+    window._maybe_apply_saved_mode()
+    got.clear()
+
+    window._show_error("Reset failed", "x")
+
+    assert got == [("Reset failed", "x")]
+
+
+def test_unrelated_action_error_after_login_success_is_normal(
+    make_window, monkeypatch
+) -> None:
+    window, persisted = make_window("sysmon", autostart=True)
+    monkeypatch.setattr(window, "_start_sysmon", lambda: True)
     got: list[tuple[str, str]] = []
     window.notify.connect(lambda t, m: got.append((t, m)))
     window._maybe_apply_saved_mode()
 
-    window._show_error("Panel unavailable", "not found")
-    window._show_error("Panel unavailable", "not found")
-    window._show_error("Panel unavailable", "not found")
+    window._on_action_err("x")
 
-    assert len(got) == 1
+    assert not window._login_timer.isActive()
+    assert window._active_mode == "sysmon"
+    assert "off" not in persisted
+    assert got == [("Action failed", "x")]
 
 
 def test_manual_selection_cancels_login_retry(make_window, monkeypatch) -> None:
@@ -206,12 +247,38 @@ def test_normal_launch_failure_still_persists_off(make_window, monkeypatch) -> N
     assert not window._login_timer.isActive()
 
 
-def test_login_action_error_retries(make_window, monkeypatch) -> None:
+def _login_static_window(make_window, monkeypatch):
     window, persisted = make_window("test", autostart=True)
-    monkeypatch.setattr(window, "_start_test_pattern", lambda: True)
-    window._maybe_apply_saved_mode()
+    worker = win_workers.TaskWorker(lambda: None)
+    worker.finished_ok.connect(window._on_action_ok)
+    worker.finished_err.connect(window._on_action_err)
 
-    window._on_action_err("USB busy")
+    def _start() -> bool:
+        window._action_worker = worker
+        return True
+
+    monkeypatch.setattr(window, "_start_test_pattern", _start)
+    window._maybe_apply_saved_mode()
+    return window, persisted, worker
+
+
+def test_login_action_error_retries(make_window, monkeypatch) -> None:
+    window, persisted, worker = _login_static_window(make_window, monkeypatch)
+
+    worker.finished_err.emit("USB busy")
 
     assert "off" not in persisted
     assert window._login_timer.isActive()
+    window._action_worker = None
+    worker.deleteLater()
+
+
+def test_login_action_ok_ends_login_episode(make_window, monkeypatch) -> None:
+    window, _, worker = _login_static_window(make_window, monkeypatch)
+
+    worker.finished_ok.emit(None)
+
+    assert window._login_mode is None
+    assert not window._login_timer.isActive()
+    window._action_worker = None
+    worker.deleteLater()
