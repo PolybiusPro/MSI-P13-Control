@@ -70,7 +70,7 @@ class MainWindow(QMainWindow):
     notify = Signal(str, str)
     mode_text_changed = Signal(str)
 
-    def __init__(self) -> None:
+    def __init__(self, *, autostart: bool = False) -> None:
         super().__init__()
         self.setWindowTitle("MSI P13 Control")
         self.setMinimumWidth(420)
@@ -90,6 +90,9 @@ class MainWindow(QMainWindow):
         self._face_colors: dict[str, str] = {}
         self._image_path: str | None = None
         self._active_mode: str | None = MODE_OFF
+        self._autostart = autostart
+        self._login_mode: str | None = None
+        self._login_notified = False
 
         # Debounce slider drags so each step doesn't open the HID device.
         self._brightness_timer = QTimer(self)
@@ -102,6 +105,12 @@ class MainWindow(QMainWindow):
         self._sysmon_opts_timer.setSingleShot(True)
         self._sysmon_opts_timer.setInterval(750)
         self._sysmon_opts_timer.timeout.connect(self._apply_sysmon_opts)
+
+        # Login: retry a failed mode start until the panel is available.
+        self._login_timer = QTimer(self)
+        self._login_timer.setSingleShot(True)
+        self._login_timer.setInterval(10_000)
+        self._login_timer.timeout.connect(self._retry_login_mode)
 
         self._build_ui()
         self._load_saved_mode()
@@ -436,7 +445,9 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         mode = self._active_mode or MODE_OFF
-        if mode == MODE_EXTENDED and self._mirror_running():
+        if self._login_mode is not None and mode == MODE_OFF:
+            text = "Waiting for panel, retrying every 10 seconds"
+        elif mode == MODE_EXTENDED and self._mirror_running():
             text = "Extended monitor running"
         elif mode == MODE_SYSMON and self._worker_alive(self._sysmon_worker):
             text = f"System monitor running (style {self._selected_sysmon_style()})"
@@ -711,9 +722,29 @@ class MainWindow(QMainWindow):
             self._active_mode = MODE_OFF
             self._refresh_mode_status()
             return
-        self._apply_mode(saved)
+        self._apply_mode(saved, login=self._autostart)
 
-    def _apply_mode(self, mode: str) -> None:
+    def _cancel_login_retry(self) -> None:
+        self._login_timer.stop()
+        self._login_mode = None
+        self._login_notified = False
+
+    def _login_failed(self) -> None:
+        """Keep the saved mode and try again; the panel may not have enumerated yet."""
+        self._active_mode = MODE_OFF
+        self._refresh_mode_status()
+        self._login_timer.start()
+
+    def _retry_login_mode(self) -> None:
+        if self._closing or self._login_mode is None:
+            return
+        self._apply_mode(self._login_mode, login=True)
+
+    def _apply_mode(self, mode: str, *, login: bool = False) -> None:
+        if login:
+            self._login_mode = mode
+        else:
+            self._cancel_login_retry()
         previous = self._active_mode
         self._stop_current_mode(save_layout=previous == MODE_EXTENDED)
         if mode == MODE_OFF:
@@ -736,6 +767,9 @@ class MainWindow(QMainWindow):
         elif mode == MODE_CLOCK:
             ok = self._start_clock()
         if not ok:
+            if self._login_mode is not None:
+                self._login_failed()
+                return
             self._blank_display()
             self._active_mode = MODE_OFF
             self._persist_mode(MODE_OFF)
@@ -806,6 +840,10 @@ class MainWindow(QMainWindow):
         self._mirror_worker = None
 
     def _on_mirror_error(self, msg: str) -> None:
+        if self._login_mode is not None:
+            self._show_error("Extended monitor failed", msg)
+            self._login_failed()
+            return
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
         self._show_error("Extended monitor failed", msg)
@@ -967,6 +1005,10 @@ class MainWindow(QMainWindow):
     def _on_sysmon_error(self, msg: str) -> None:
         if self._stale_face_signal():
             return
+        if self._login_mode is not None:
+            self._show_error("System monitor failed", msg)
+            self._login_failed()
+            return
         self._active_mode = MODE_OFF
         self._persist_mode(MODE_OFF)
         self._show_error("System monitor failed", msg)
@@ -1021,6 +1063,10 @@ class MainWindow(QMainWindow):
             self._refresh_mode_status()
 
     def _on_action_err(self, msg: str) -> None:
+        if self._login_mode is not None:
+            self._show_error("Action failed", msg)
+            self._login_failed()
+            return
         self._show_error("Action failed", msg)
         self._refresh_mode_status()
 
@@ -1031,6 +1077,10 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         _LOGGER.error("%s: %s", title, message)
+        if self._login_mode is not None:
+            if self._login_notified:
+                return
+            self._login_notified = True
         if self.isVisible():
             QMessageBox.critical(self, title, message)
         else:
@@ -1044,6 +1094,7 @@ class MainWindow(QMainWindow):
             self.killTimer(self._poll_timer)
         except Exception:  # noqa: BLE001
             pass
+        self._login_timer.stop()
         stop_active_sessions()
         # Stop in-process workers before the process exits.
         if self._worker_alive(self._sysmon_worker):

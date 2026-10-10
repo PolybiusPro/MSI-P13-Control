@@ -47,7 +47,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     try:
-        window = MainWindow()
+        window = MainWindow(autostart=args.minimized)
     except Exception as exc:  # noqa: BLE001
         _LOGGER.error("Failed to start: %s", exc)
         if not args.minimized:

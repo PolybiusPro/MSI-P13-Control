@@ -142,3 +142,76 @@ def test_request_quit_quits_even_if_quit_app_raises(make_window, monkeypatch) ->
         window.request_quit()
 
     assert quits == [1]
+
+
+def test_login_sync_failure_does_not_persist_off(make_window, monkeypatch) -> None:
+    window, persisted = make_window("sysmon", autostart=True)
+    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+
+    window._maybe_apply_saved_mode()
+
+    assert "off" not in persisted
+    assert window._login_timer.isActive()
+    assert window._login_timer.interval() == 10_000
+
+
+def test_login_async_error_retries_without_persisting_off(make_window, monkeypatch) -> None:
+    window, persisted = make_window("sysmon", autostart=True)
+    starts: list[int] = []
+    monkeypatch.setattr(window, "_start_sysmon", lambda: starts.append(1) or True)
+    window._maybe_apply_saved_mode()
+
+    window._on_sysmon_error("Artinchip display not found")
+
+    assert "off" not in persisted
+    assert window._login_timer.isActive()
+    window._login_timer.timeout.emit()
+    assert starts == [1, 1]
+
+
+def test_login_failure_notifies_once(make_window, monkeypatch) -> None:
+    window, _ = make_window("sysmon", autostart=True)
+    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+    got: list[tuple[str, str]] = []
+    window.notify.connect(lambda t, m: got.append((t, m)))
+    window._maybe_apply_saved_mode()
+
+    window._show_error("Panel unavailable", "not found")
+    window._show_error("Panel unavailable", "not found")
+    window._show_error("Panel unavailable", "not found")
+
+    assert len(got) == 1
+
+
+def test_manual_selection_cancels_login_retry(make_window, monkeypatch) -> None:
+    window, _ = make_window("sysmon", autostart=True)
+    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+    monkeypatch.setattr(window, "_start_test_pattern", lambda: True)
+    window._maybe_apply_saved_mode()
+    assert window._login_timer.isActive()
+
+    window._apply_mode("test")
+
+    assert not window._login_timer.isActive()
+    assert window._login_mode is None
+
+
+def test_normal_launch_failure_still_persists_off(make_window, monkeypatch) -> None:
+    window, persisted = make_window("sysmon")
+    monkeypatch.setattr(window, "_start_sysmon", lambda: False)
+
+    window._maybe_apply_saved_mode()
+
+    assert "off" in persisted
+    assert not window._login_timer.isActive()
+
+
+def test_login_action_error_retries(make_window, monkeypatch) -> None:
+    window, persisted = make_window("test", autostart=True)
+    monkeypatch.setattr(window, "_start_test_pattern", lambda: True)
+    window._maybe_apply_saved_mode()
+
+    window._on_action_err("USB busy")
+
+    assert "off" not in persisted
+    assert window._login_timer.isActive()
