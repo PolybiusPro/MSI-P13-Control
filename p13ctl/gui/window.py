@@ -1082,12 +1082,14 @@ class MainWindow(QMainWindow):
         try:
             wait_for_display_usb()
             send_black_image()
-        except DisplayError as exc:
-            _LOGGER.warning("could not blank panel on quit: %s", exc)
+        except Exception as exc:  # noqa: BLE001 - quit must never fail (USBError, OSError, ...)
+            _LOGGER.warning("could not blank panel on quit: %s", exc, exc_info=True)
 
     def request_quit(self) -> None:
-        self.quit_app()
-        QApplication.quit()
+        try:
+            self.quit_app()
+        finally:
+            QApplication.quit()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         if QSystemTrayIcon.isSystemTrayAvailable():

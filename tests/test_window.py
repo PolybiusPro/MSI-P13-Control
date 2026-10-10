@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+import usb.core
 from PySide6.QtWidgets import QMessageBox, QSystemTrayIcon
 
 from p13ctl.display.artinchip import DisplayError
@@ -150,3 +151,47 @@ def test_mode_text_is_published(make_window) -> None:
     window.mode_text_changed.connect(got.append)
     window._refresh_mode_status()
     assert got and got[-1] == window._mode_status.text()
+
+
+def test_quit_app_survives_usb_error(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+    monkeypatch.setattr(win, "wait_for_display_usb", lambda: None)
+
+    def _write_failed() -> None:
+        raise usb.core.USBError("write failed")
+
+    monkeypatch.setattr(win, "send_black_image", _write_failed)
+
+    window.quit_app()
+
+
+def test_request_quit_still_quits_on_unexpected_error(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+    monkeypatch.setattr(win, "wait_for_display_usb", lambda: None)
+
+    def _broken() -> None:
+        raise OSError("boom")
+
+    monkeypatch.setattr(win, "send_black_image", _broken)
+    quits: list[int] = []
+    monkeypatch.setattr(win.QApplication, "quit", staticmethod(lambda: quits.append(1)))
+
+    window.request_quit()
+
+    assert quits == [1]
+
+
+def test_request_quit_quits_even_if_quit_app_raises(make_window, monkeypatch) -> None:
+    window, _ = make_window()
+
+    def _raises() -> None:
+        raise RuntimeError("shutdown failed")
+
+    monkeypatch.setattr(window, "quit_app", _raises)
+    quits: list[int] = []
+    monkeypatch.setattr(win.QApplication, "quit", staticmethod(lambda: quits.append(1)))
+
+    with pytest.raises(RuntimeError):
+        window.request_quit()
+
+    assert quits == [1]
