@@ -285,6 +285,14 @@ install_evdi_packages() {
     run_root apt-get install -y evdi-dkms libevdi1 || {
       die "evdi-dkms not found — try: sudo apt install evdi-dkms libevdi1"
     }
+  elif command -v pacman >/dev/null 2>&1; then
+    echo "==> Installing EVDI packages (pacman)"
+    # evdi-dkms ships libevdi.so; there is no separate libevdi package.
+    if ! pacman -Q evdi-dkms >/dev/null 2>&1; then
+      run_root pacman -S --needed --noconfirm dkms evdi-dkms || {
+        die "evdi-dkms not found in pacman repos — install it from the AUR (e.g. yay -S evdi-dkms)"
+      }
+    fi
   else
     die "unsupported distro for EVDI — install evdi-dkms + libevdi manually"
   fi
