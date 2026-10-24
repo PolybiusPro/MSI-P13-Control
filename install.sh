@@ -4,7 +4,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LINUX="$ROOT/tools/linux"
-VENV="$ROOT/.venv"
+VENV="${P13CTL_VENV:-$ROOT/.venv}"
 
 DO_SYSTEM_DEPS=1
 DO_EVDI=1
@@ -348,10 +348,10 @@ SB
 
 install_udev() {
   echo "==> Installing udev rules"
-  run_root cp "$LINUX/99-msi-p13.rules" /etc/udev/rules.d/
+  run_root cp "$LINUX/60-msi-p13.rules" /etc/udev/rules.d/
   run_root udevadm control --reload-rules
   run_root udevadm trigger
-  echo "    Added /etc/udev/rules.d/99-msi-p13.rules"
+  echo "    Added /etc/udev/rules.d/60-msi-p13.rules"
 }
 
 remove_legacy_services() {
@@ -428,8 +428,8 @@ install_python() {
   if ((${#extras_parts[@]} > 0)); then
     extras="[$(IFS=,; echo "${extras_parts[*]}")]"
   fi
-  pip install --upgrade pip
-  pip install -e "$ROOT$extras"
+  python -m pip install --upgrade pip
+  python -m pip install -e "$ROOT$extras"
 }
 
 # --- install ---
@@ -485,7 +485,8 @@ cat <<EOF
 Done.
 
 Activate the environment:
-  source "$VENV/bin/activate"
+  source "$VENV/bin/activate"        # bash/zsh
+  source "$VENV/bin/activate.fish"   # fish
 
 Try:
   p13ctl list

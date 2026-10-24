@@ -3,7 +3,7 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-VENV="$ROOT/.venv"
+VENV="${P13CTL_VENV:-$ROOT/.venv}"
 CONFIG_DIR="${HOME}/.config/p13ctl"
 
 DO_PYTHON=1
@@ -141,6 +141,7 @@ remove_evdi_packages() {
 
 remove_udev() {
   echo "==> Removing udev rules"
+  remove_file /etc/udev/rules.d/60-msi-p13.rules
   remove_file /etc/udev/rules.d/99-msi-p13.rules
   run_root udevadm control --reload-rules 2>/dev/null || true
   run_root udevadm trigger 2>/dev/null || true
