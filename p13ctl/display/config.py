@@ -18,7 +18,6 @@ from typing import Any
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_VERSION = 3
-LAYOUT_VERSION = CONFIG_VERSION  # backward compat alias
 
 
 def config_dir() -> Path:
@@ -34,10 +33,6 @@ LEGACY_JSON_PATH = config_dir() / "display-layout.json"
 CONFIG_LOCK = threading.RLock()
 KNOWN_SECTIONS = frozenset({"version", "virtual", "panel", "stream", "mode"})
 GENERAL_SECTION = "general"
-
-
-def layout_path() -> Path:
-    return LAYOUT_PATH
 
 
 def encode_value(value: Any) -> str:

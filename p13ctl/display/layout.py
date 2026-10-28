@@ -112,17 +112,6 @@ def reset_saved_layout() -> None:
         except OSError as exc:
             raise DisplayError(f"could not remove saved config: {exc}") from exc
 
-def read_panel_state() -> dict[str, int]:
-    """Read brightness and physical rotation from the P13 HID interface."""
-    from p13ctl.hid.msi_p13 import HidError, P13HidController
-
-    try:
-        with P13HidController() as hid:
-            info = hid.connect_session()
-    except HidError as exc:
-        raise DisplayError(f"could not read panel settings: {exc}") from exc
-    return {"brightness": int(info.brightness), "rotation": int(info.degree)}
-
 def apply_panel_config(panel: dict[str, Any]) -> bool:
     """Apply saved brightness and physical panel rotation via HID."""
     from p13ctl.hid.msi_p13 import HidError, P13HidController
@@ -350,7 +339,6 @@ def physical_outputs(outputs: list[dict[str, Any]] | None = None) -> list[dict[s
 
 def aligned_virtual_position(
     *,
-    panel_w: int = 480,
     panel_h: int = 480,
     outputs: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
@@ -543,10 +531,6 @@ def save_display_config(
         config_file.write_config_file(data)
         _LOGGER.info("saved display config to %s", config_file.LAYOUT_PATH)
         return config_file.LAYOUT_PATH
-
-def save_layout(virtual_output: str | None = None) -> Path:
-    """Save only the virtual monitor section (merges with existing config)."""
-    return save_display_config(virtual_output=virtual_output)
 
 def _load_virtual_entry(data: dict[str, Any]) -> dict[str, Any] | None:
     if data.get("version") in (config_file.CONFIG_VERSION, 2) and data.get("virtual"):

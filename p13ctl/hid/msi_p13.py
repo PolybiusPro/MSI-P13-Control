@@ -109,8 +109,8 @@ class P13HidController:
         self._dev = device
         self._owned = device is None
 
-    @classmethod
-    def find_path(cls) -> Optional[str]:
+    @staticmethod
+    def find_path() -> Optional[str]:
         for info in hid.enumerate(VENDOR_ID, PRODUCT_ID):
             if info.get("interface_number") == HID_INTERFACE:
                 return info["path"]
@@ -185,12 +185,6 @@ class P13HidController:
         except ProtocolError as exc:
             raise HidError(f"protocol decode failed: {exc}") from exc
         return payload.decode("utf-8", errors="replace").rstrip("\x00")
-
-    def _request(self, message: str, read_response: bool = False) -> Optional[str]:
-        self._write_message(message)
-        if not read_response:
-            return None
-        return self._read_message()
 
     def _field(self, data: dict[str, Any], *names: str, default: Any = None) -> Any:
         """Read a JSON field with PascalCase or camelCase keys."""

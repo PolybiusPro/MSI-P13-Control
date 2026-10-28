@@ -146,7 +146,7 @@ def configure_virtual_output(
     if saved and apply_layout(saved, evdi_output=evdi_output):
         return evdi_output, True
 
-    placement = aligned_virtual_position(panel_w=PANEL_WIDTH, panel_h=PANEL_HEIGHT)
+    placement = aligned_virtual_position(panel_h=PANEL_HEIGHT)
     position = placement["position"]
     mode = f"{PANEL_WIDTH}x{PANEL_HEIGHT}"
 
