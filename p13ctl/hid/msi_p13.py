@@ -70,11 +70,9 @@ def _build_post(command: str, body: str = "", seq: int = 100) -> str:
         f"SeqNumber={seq}\r\n"
         f"ContentType=json\r\n"
     )
+    # The conn request ends without a blank body line when there is no body.
     if body:
         headers += f"ContentLength={len(body)}\r\n\r\n{body}"
-    else:
-        # The conn request ends without a blank body line when ContentLength is omitted.
-        pass
     return headers
 
 def _parse_post_response(text: str) -> tuple[dict[str, str], str]:
@@ -88,6 +86,23 @@ def _parse_post_response(text: str) -> tuple[dict[str, str], str]:
             key, value = line.split("=", 1)
             headers[key.strip()] = value.strip()
     return headers, body
+
+_ERROR_STATUS = re.compile(r"\b[45]\d\d\b")
+_OK_STATUS = re.compile(r"\b2\d\d\b")
+
+def _classify_ack(response: str, seq: int) -> str | None:
+    """Return "ack" or "nack" for a reply to command ``seq``; None if unrelated.
+
+    No firmware ack has been captured yet (see docs/protocol-hid.md); the reply
+    shapes accepted here are assumptions, and no caller currently waits for one.
+    """
+    headers, _body = _parse_post_response(response)
+    status_line = headers.get("command", "")
+    if _ERROR_STATUS.search(status_line):
+        return "nack"
+    if headers.get("SeqNumber") == str(seq + 1) or _OK_STATUS.search(status_line):
+        return "ack"
+    return None
 
 class P13HidController:
     def __init__(self, device: Optional[hid.device] = None):
@@ -222,36 +237,23 @@ class P13HidController:
         raise HidError("HID read timeout")
 
     def _command_with_ack(self, command: str, body: str, seq: int, *, retries: int = 2) -> bool:
-        """Write a POST and wait for a SeqNumber+1 ack."""
+        """Write a POST and wait for a SeqNumber+1 ack; False if none arrives."""
         msg = _build_post(command, body, seq=seq)
         for attempt in range(retries):
             try:
                 self._write_message(msg)
                 response = self._read_until(
                     timeout_ms=2000,
-                    predicate=lambda text: (
-                        str(seq + 1) in text
-                        or "httpStatusCode" in text
-                        or "200" in text
-                        or "400" in text
-                    ),
+                    predicate=lambda text: _classify_ack(text, seq) is not None,
                 )
-                if "400" in response.split("\r\n", 1)[0]:
-                    _LOGGER.debug("nack attempt %s: %r", attempt + 1, response[:120])
-                    continue
-                if str(seq + 1) in response or "200" in response:
-                    return True
-                _LOGGER.debug("ack mismatch attempt %s: %r", attempt + 1, response[:120])
             except HidError as exc:
                 _LOGGER.debug("command %s attempt %s failed: %s", command, attempt + 1, exc)
                 time.sleep(0.5)
-        # Fall back to fire-and-forget like brightness (some firmwares skip ack).
-        try:
-            self._write_message(msg)
-            self._write_message(msg)
-            return True
-        except HidError:
-            return False
+                continue
+            if _classify_ack(response, seq) == "ack":
+                return True
+            _LOGGER.debug("nack attempt %s: %r", attempt + 1, response[:120])
+        return False
 
     def connect_session(self) -> DeviceInfo:
         """POST conn — returns device metadata JSON from firmware.
@@ -335,7 +337,7 @@ class P13HidController:
         _LOGGER.info("realtimeDisplay -> %s", enable)
         return True
 
-    def enable_host_display(self) -> DeviceInfo:
+    def enable_host_display(self) -> None:
         """Cold-boot handoff: assert extendedDisplay(+realtime) for host JPEG.
 
         Skips the slow ``conn`` query — that held hidraw for multiple seconds and
@@ -343,7 +345,6 @@ class P13HidController:
         """
         self.set_extended_display(True)
         self.set_realtime_display(True)
-        return DeviceInfo()
 
     def set_brightness(self, percent: int) -> None:
         value = max(0, min(100, int(percent)))
@@ -379,7 +380,7 @@ class P13HidController:
                 continue
         return packets
 
-def enable_host_display() -> DeviceInfo:
+def enable_host_display() -> None:
     """Module helper used by display paths before USB JPEG streaming."""
     with P13HidController() as hid_dev:
-        return hid_dev.enable_host_display()
+        hid_dev.enable_host_display()

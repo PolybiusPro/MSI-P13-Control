@@ -79,6 +79,27 @@ run_root() {
   fi
 }
 
+# Print the headers package matching the running Arch-family kernel, if known.
+arch_kernel_headers() {
+  local base
+  base="$(cat "/usr/lib/modules/$(uname -r)/pkgbase" 2>/dev/null || true)"
+  if [[ -n "$base" ]]; then
+    echo "${base}-headers"
+  fi
+}
+
+install_arch_headers() {
+  local headers
+  headers="$(arch_kernel_headers)"
+  if [[ -z "$headers" ]]; then
+    echo "    warning: cannot tell which kernel headers package matches $(uname -r); DKMS may fail" >&2
+    return 0
+  fi
+  run_root pacman -S --needed --noconfirm "$headers" || {
+    echo "    warning: could not install $headers; DKMS may fail" >&2
+  }
+}
+
 install_system_deps() {
   if command -v apt-get >/dev/null 2>&1; then
     echo "==> Installing system packages (apt)"
@@ -112,6 +133,9 @@ install_system_deps() {
   elif command -v pacman >/dev/null 2>&1; then
     echo "==> Installing system packages (pacman)"
     run_root pacman -S --needed --noconfirm python python-pip libusb hidapi xorg-xrandr
+    if [[ "$DO_EVDI" == "1" ]]; then
+      install_arch_headers
+    fi
     if [[ "$WITH_DESKTOP" == "1" ]]; then
       run_root pacman -S --needed --noconfirm python-dbus 2>/dev/null || true
     fi
@@ -263,10 +287,11 @@ load_evdi_module() {
 }
 
 install_evdi_fedora_rpm() {
-  local fedora_ver rpm_url rpm_path evdi_ver
+  local fedora_ver rpm_url rpm_dir rpm_path
   fedora_ver="$(rpm -E %fedora)"
   rpm_url="https://github.com/displaylink-rpm/displaylink-rpm/releases/download/${DISPLAYLINK_TAG}/fedora-${fedora_ver}-displaylink-${DISPLAYLINK_VER}.x86_64.rpm"
-  rpm_path="/tmp/p13ctl-displaylink-${fedora_ver}.rpm"
+  rpm_dir="$(mktemp -d)"
+  rpm_path="$rpm_dir/displaylink-${fedora_ver}.rpm"
 
   echo "==> Installing EVDI build dependencies (dnf)"
   run_root dnf install -y dkms kernel-devel kernel-headers libdrm-devel mokutil curl
@@ -274,7 +299,16 @@ install_evdi_fedora_rpm() {
   echo "==> Downloading displaylink RPM (EVDI) for Fedora ${fedora_ver}"
   echo "    $rpm_url"
   curl -fsSL -o "$rpm_path" "$rpm_url"
-  run_root dnf install -y "$rpm_path"
+  if [[ -n "${DISPLAYLINK_RPM_SHA256:-}" ]]; then
+    echo "${DISPLAYLINK_RPM_SHA256}  $rpm_path" | sha256sum --check --status \
+      || { rm -rf "$rpm_dir"; die "displaylink RPM checksum mismatch"; }
+  else
+    echo "    note: set DISPLAYLINK_RPM_SHA256 to verify the download" >&2
+  fi
+  local rc=0
+  run_root dnf install -y "$rpm_path" || rc=$?
+  rm -rf "$rpm_dir"
+  return "$rc"
 }
 
 install_evdi_packages() {
@@ -289,6 +323,7 @@ install_evdi_packages() {
     echo "==> Installing EVDI packages (pacman)"
     # evdi-dkms ships libevdi.so; there is no separate libevdi package.
     if ! pacman -Q evdi-dkms >/dev/null 2>&1; then
+      install_arch_headers
       run_root pacman -S --needed --noconfirm dkms evdi-dkms || {
         die "evdi-dkms not found in pacman repos — install it from the AUR (e.g. yay -S evdi-dkms)"
       }
@@ -358,7 +393,9 @@ install_udev() {
   echo "==> Installing udev rules"
   run_root cp "$LINUX/60-msi-p13.rules" /etc/udev/rules.d/
   run_root udevadm control --reload-rules
-  run_root udevadm trigger
+  run_root udevadm trigger --action=change --subsystem-match=usb \
+    --attr-match=idVendor=33c3 --attr-match=idProduct=0e02
+  run_root udevadm trigger --action=change --subsystem-match=hidraw
   echo "    Added /etc/udev/rules.d/60-msi-p13.rules"
 }
 

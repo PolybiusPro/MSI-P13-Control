@@ -66,7 +66,7 @@ class SingleInstance(QObject):
             self._on_ready(sender)
 
     def _on_ready(self, sock: QLocalSocket) -> None:
-        if bytes(sock.readAll()).startswith(_PING):
+        if bytes(sock.readAll().data()).startswith(_PING):
             self.show_requested.emit()
 
     def _on_disconnected(self) -> None:

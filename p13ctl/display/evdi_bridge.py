@@ -6,6 +6,7 @@ import ctypes
 import io
 import logging
 import select
+import threading
 import time
 from typing import cast
 
@@ -36,6 +37,7 @@ class EvdiBridge:
         quality: int = 75,
         rotate: int = 0,
         on_mode_changed_hook=None,
+        stop: threading.Event | None = None,
     ):
         self.fps = max(1, fps)
         self.frame_interval = 1.0 / self.fps
@@ -45,7 +47,8 @@ class EvdiBridge:
         self._layout_reapply_pending = False
         self.handle = None
         self.display: ArtinchipDisplay | None = None
-        self.running = False
+        # Shared with the owner so a stop requested during startup is not lost.
+        self._stop = stop if stop is not None else threading.Event()
         self._buf = (ctypes.c_ubyte * BUF_SIZE)()
         self._buf_ptr = ctypes.cast(self._buf, ctypes.c_void_p)
         self._rects = (evdi.EvdiRect * MAX_RECTS)()
@@ -102,9 +105,12 @@ class EvdiBridge:
             MAX_RECTS,
         )
 
+    def request_stop(self) -> None:
+        self._stop.set()
+
     def setup_usb(self) -> bool:
         try:
-            self.display = ArtinchipDisplay(rotate=self.rotate)
+            self.display = ArtinchipDisplay(rotate=self.rotate, stop=self._stop)
             self.display.connect()
         except DisplayError as exc:
             _LOGGER.debug("USB display not ready: %s", exc)
@@ -158,6 +164,8 @@ class EvdiBridge:
             evdi.handle_events(self.handle, self._evt_ctx)
 
     def run(self) -> None:
+        if self._stop.is_set():
+            return
         if self.handle is None:
             self.setup_evdi()
         if self.display is None:
@@ -184,12 +192,11 @@ class EvdiBridge:
         event_fd = evdi.get_event_fd(self.handle)
         _LOGGER.info("EVDI bridge target %d fps (event fd=%d)", self.fps, event_fd)
 
-        self.running = True
         next_frame = time.perf_counter()
         stats_t0 = time.perf_counter()
         stats_frames = 0
 
-        while self.running:
+        while not self._stop.is_set():
             now = time.perf_counter()
             wait = next_frame - now
             if wait > 0.001:
@@ -285,7 +292,7 @@ class EvdiBridge:
         self._layout_reapply_pending = True
 
     def shutdown(self) -> None:
-        self.running = False
+        self.request_stop()
         if self.display is not None:
             self.display.close()
             self.display = None

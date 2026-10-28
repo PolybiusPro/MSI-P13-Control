@@ -10,19 +10,35 @@ import re
 import shutil
 import subprocess
 import tempfile
+import threading
 from pathlib import Path
 from typing import Any
 
 from .artinchip import DisplayError
+from .edid import generate_edid
 
 _LOGGER = logging.getLogger(__name__)
 
 CONFIG_VERSION = 3
 LAYOUT_VERSION = CONFIG_VERSION  # backward compat alias
-LAYOUT_PATH = Path.home() / ".config/p13ctl/display.ini"
-LEGACY_JSON_PATH = Path.home() / ".config/p13ctl/display-layout.json"
+
+
+def _config_dir() -> Path:
+    """Return the p13ctl config directory, honoring XDG_CONFIG_HOME."""
+    base = os.environ.get("XDG_CONFIG_HOME")
+    root = Path(base) if base else Path.home() / ".config"
+    return root / "p13ctl"
+
+
+LAYOUT_PATH = _config_dir() / "display.ini"
+LEGACY_JSON_PATH = _config_dir() / "display-layout.json"
+# Serializes read-modify-write cycles on the config file within this process.
+_CONFIG_LOCK = threading.RLock()
+_KNOWN_SECTIONS = frozenset({"version", "virtual", "panel", "stream", "mode"})
 _GENERAL_SECTION = "general"
+DRM_SYSFS = Path("/sys/class/drm")
 _EVDI_PREFIXES = ("DVI-I", "DVI-D", "DVI")
+_CONNECTOR_DIR = re.compile(r"^card\d+-(.+)$")
 _PHYSICAL_PREFIXES = ("eDP", "HDMI", "DP-", "Virtual")
 
 # KScreen::Output::Rotation bit flags (see libkscreen output.h)
@@ -125,7 +141,52 @@ def _write_config_file(data: dict[str, Any]) -> None:
         Path(tmp_name).unlink(missing_ok=True)
         raise
 
+def _unknown_sections() -> dict[str, Any]:
+    """Sections written by other versions, to carry through a rewrite."""
+    raw = _read_config_file() or {}
+    return {
+        name: section
+        for name, section in raw.items()
+        if name not in _KNOWN_SECTIONS and isinstance(section, dict)
+    }
+
+def _evdi_connectors() -> set[str]:
+    """Connector names that sysfs shows to be EVDI virtual outputs.
+
+    A connector counts when it is bound to the evdi driver or advertises the
+    panel's own EDID identity (manufacturer and product code).
+    """
+    panel_id = generate_edid()[8:12]
+    found: set[str] = set()
+    try:
+        entries = list(DRM_SYSFS.iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        match = _CONNECTOR_DIR.match(entry.name)
+        if match is None:
+            continue
+        try:
+            driver = (entry / "device" / "driver").resolve().name
+        except OSError:
+            driver = ""
+        try:
+            edid_id = (entry / "edid").read_bytes()[8:12]
+        except OSError:
+            edid_id = b""
+        if driver == "evdi" or edid_id == panel_id:
+            found.add(match.group(1))
+    return found
+
 def is_evdi_output(name: str) -> bool:
+    """True for the EVDI virtual output.
+
+    Sysfs decides when it can identify an EVDI connector; the legacy DVI name
+    prefix is only the fallback when it cannot.
+    """
+    known = _evdi_connectors()
+    if known:
+        return name in known
     return any(name.startswith(prefix) for prefix in _EVDI_PREFIXES)
 
 def is_physical_output(name: str) -> bool:
@@ -143,19 +204,21 @@ def find_connected_virtual_output() -> str | None:
 
 def reset_saved_layout() -> None:
     """Clear saved virtual-output placement; keep stream/panel/mode prefs."""
-    existing = load_display_config() or {}
-    keep: dict[str, Any] = {"version": CONFIG_VERSION}
-    for key in ("panel", "stream", "mode"):
-        if existing.get(key):
-            keep[key] = existing[key]
-    try:
-        if keep.keys() - {"version"}:
-            _write_config_file(keep)
-        else:
-            LAYOUT_PATH.unlink(missing_ok=True)
-        LEGACY_JSON_PATH.unlink(missing_ok=True)
-    except OSError as exc:
-        raise DisplayError(f"could not remove saved config: {exc}") from exc
+    with _CONFIG_LOCK:
+        existing = load_display_config() or {}
+        keep: dict[str, Any] = {"version": CONFIG_VERSION}
+        for key in ("panel", "stream", "mode"):
+            if existing.get(key):
+                keep[key] = existing[key]
+        keep.update(_unknown_sections())
+        try:
+            if keep.keys() - {"version"}:
+                _write_config_file(keep)
+            else:
+                LAYOUT_PATH.unlink(missing_ok=True)
+            LEGACY_JSON_PATH.unlink(missing_ok=True)
+        except OSError as exc:
+            raise DisplayError(f"could not remove saved config: {exc}") from exc
 
 def read_panel_state() -> dict[str, int]:
     """Read brightness and physical rotation from the P13 HID interface."""
@@ -266,13 +329,15 @@ def apply_content_rotation(degrees: int) -> str:
     return "; ".join(notes)
 
 def _patch_virtual_rotation(output: str, rotation: str | None) -> None:
-    data = load_display_config() or {"version": CONFIG_VERSION}
-    virtual = dict(data.get("virtual") or {})
-    virtual["name"] = output
-    virtual["rotation"] = rotation
-    data["virtual"] = virtual
-    data["version"] = CONFIG_VERSION
-    _write_config_file(data)
+    with _CONFIG_LOCK:
+        data = load_display_config() or {"version": CONFIG_VERSION}
+        virtual = dict(data.get("virtual") or {})
+        virtual["name"] = output
+        virtual["rotation"] = rotation
+        data["virtual"] = virtual
+        data["version"] = CONFIG_VERSION
+        data.update(_unknown_sections())
+        _write_config_file(data)
 
 def _apply_kscreen_rotation(output: str, rotation: str) -> bool:
     doctor = shutil.which("kscreen-doctor")
@@ -552,38 +617,40 @@ def save_display_config(
     mode: dict[str, Any] | None = None,
 ) -> Path:
     """Save P13 settings, merging with any existing config on disk."""
-    existing = load_display_config() or {}
-    data: dict[str, Any] = {"version": CONFIG_VERSION}
+    with _CONFIG_LOCK:
+        existing = load_display_config() or {}
+        data: dict[str, Any] = {"version": CONFIG_VERSION}
 
-    if virtual_output is not None:
-        try:
-            captured = capture_virtual_output(virtual_output)
-            data["virtual"] = captured["virtual"]
-        except DisplayError as exc:
-            _LOGGER.warning("could not capture virtual layout: %s", exc)
-            if existing.get("virtual"):
-                data["virtual"] = existing["virtual"]
-    elif existing.get("virtual"):
-        data["virtual"] = existing["virtual"]
+        if virtual_output is not None:
+            try:
+                captured = capture_virtual_output(virtual_output)
+                data["virtual"] = captured["virtual"]
+            except DisplayError as exc:
+                _LOGGER.warning("could not capture virtual layout: %s", exc)
+                if existing.get("virtual"):
+                    data["virtual"] = existing["virtual"]
+        elif existing.get("virtual"):
+            data["virtual"] = existing["virtual"]
 
-    if panel is not None:
-        data["panel"] = panel
-    elif existing.get("panel"):
-        data["panel"] = existing["panel"]
+        if panel is not None:
+            data["panel"] = panel
+        elif existing.get("panel"):
+            data["panel"] = existing["panel"]
 
-    if stream is not None:
-        data["stream"] = stream
-    elif existing.get("stream"):
-        data["stream"] = existing["stream"]
+        if stream is not None:
+            data["stream"] = stream
+        elif existing.get("stream"):
+            data["stream"] = existing["stream"]
 
-    if mode is not None:
-        data["mode"] = mode
-    elif existing.get("mode"):
-        data["mode"] = existing["mode"]
+        if mode is not None:
+            data["mode"] = mode
+        elif existing.get("mode"):
+            data["mode"] = existing["mode"]
 
-    _write_config_file(data)
-    _LOGGER.info("saved display config to %s", LAYOUT_PATH)
-    return LAYOUT_PATH
+        data.update(_unknown_sections())
+        _write_config_file(data)
+        _LOGGER.info("saved display config to %s", LAYOUT_PATH)
+        return LAYOUT_PATH
 
 def save_layout(virtual_output: str | None = None) -> Path:
     """Save only the virtual monitor section (merges with existing config)."""

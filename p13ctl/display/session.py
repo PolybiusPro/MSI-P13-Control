@@ -49,7 +49,7 @@ def stop_active_sessions() -> None:
         bridge = _active_bridge
         display = _active_display
     if bridge is not None:
-        bridge.running = False
+        bridge.request_stop()
     if display is not None:
         display.request_stop()
 

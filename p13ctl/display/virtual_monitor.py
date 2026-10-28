@@ -19,16 +19,15 @@ from .layout import (
     apply_layout,
     apply_panel_config,
     find_connected_virtual_output,
+    is_physical_output,
     load_display_config,
     load_layout,
     reset_saved_layout,
     save_display_config,
 )
-from .session import register_bridge, stop_active_sessions, unregister_bridge
+from .session import register_bridge, unregister_bridge
 
 _LOGGER = logging.getLogger(__name__)
-
-_PHYSICAL_PREFIXES = ("eDP", "HDMI", "DP-", "Virtual")
 
 def reapply_virtual_layout(evdi_output: str) -> bool:
     layout = load_layout()
@@ -87,7 +86,6 @@ def _xrandr_outputs() -> list[tuple[str, bool, str]]:
         if " connected" not in line:
             continue
         name = line.split()[0]
-        connected = True
         primary = " primary" in line
         outputs.append((name, primary, line))
     return outputs
@@ -98,7 +96,7 @@ def find_evdi_output() -> str | None:
     if name is not None:
         return name
     for out_name, _primary, _line in _xrandr_outputs():
-        if not any(prefix in out_name for prefix in _PHYSICAL_PREFIXES):
+        if not is_physical_output(out_name):
             return out_name
     return None
 
@@ -108,7 +106,7 @@ def _rightmost_output() -> tuple[str | None, int, int]:
     right_y = 0
     right_name = None
     for name, _is_primary, line in _xrandr_outputs():
-        if any(prefix in name for prefix in _PHYSICAL_PREFIXES):
+        if is_physical_output(name):
             match = re.search(r"(\d+)x(\d+)\+(\d+)\+(\d+)", line)
             if match:
                 width = int(match.group(1))
@@ -234,8 +232,14 @@ def run_virtual_monitor(
     configure: bool = True,
     save_layout: bool = True,
     reset_layout: bool = False,
+    stop: threading.Event | None = None,
 ) -> None:
-    """Create an EVDI virtual monitor and stream it to the P13 panel."""
+    """Create an EVDI virtual monitor and stream it to the P13 panel.
+
+    ``stop`` lets the caller request a shutdown at any point, including while
+    the virtual output is still being set up.
+    """
+    stop = stop if stop is not None else threading.Event()
     ensure_evdi_loaded()
 
     saved_config = None if reset_layout else load_display_config()
@@ -254,12 +258,13 @@ def run_virtual_monitor(
         quality=quality,
         rotate=rotate,
         on_mode_changed_hook=_reapply_saved_layout,
+        stop=stop,
     )
 
     def _request_stop(signum: int, _frame) -> None:
         _LOGGER.info("received signal %s, stopping", signum)
         # Stop the stream loop only — save layout in finally before EVDI disconnect.
-        bridge.running = False
+        bridge.request_stop()
 
     if threading.current_thread() is threading.main_thread():
         signal.signal(signal.SIGTERM, _request_stop)
@@ -267,12 +272,17 @@ def run_virtual_monitor(
 
     try:
         bridge.setup_evdi()
+        if stop.is_set():
+            return
         if configure:
-            time.sleep(2)
+            if stop.wait(2):
+                return
             output_name, restored = configure_virtual_output(
                 save=False,
                 reset_layout=reset_layout,
             )
+            if stop.is_set():
+                return
             msg = (
                 f"Virtual monitor {output_name} enabled ({PANEL_WIDTH}x{PANEL_HEIGHT} @ 60Hz).\n"
                 "Drag windows onto it to show them on the P13 panel.\n"

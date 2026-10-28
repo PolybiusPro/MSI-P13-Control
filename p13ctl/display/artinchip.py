@@ -13,6 +13,7 @@ import errno
 import logging
 import os
 import struct
+import threading
 import time
 from typing import Optional, cast
 
@@ -35,6 +36,11 @@ DISPLAY_INTERFACE = 0
 EP_OUT = 0x01
 EP_IN = 0x81
 MAX_TRANSFER = 4096 * 64
+
+# A frame write that fails with one of these means the handle went stale
+# (panel re-enumerated or dropped off the bus); reconnect once and resend.
+_RECONNECT_ERRNOS = frozenset({errno.ENODEV, errno.EIO})
+_RECONNECT_RETRY_S = 0.5
 
 # Public key from Artinchip aic-render / tinyscreen (community RE).
 RSA_PUB_PEM = b"""-----BEGIN PUBLIC KEY-----
@@ -73,7 +79,13 @@ def _rsa_public_decrypt(pub_key: rsa.RSAPublicKey, ciphertext: bytes) -> bytes:
 class ArtinchipDisplay:
     """Drive the P13 LCD via Artinchip bulk JPEG streaming."""
 
-    def __init__(self, rotate: int = 0, *, enable_host: bool = True):
+    def __init__(
+        self,
+        rotate: int = 0,
+        *,
+        enable_host: bool = True,
+        stop: threading.Event | None = None,
+    ):
         self._dev: Optional[usb.core.Device] = None
         self.width = 0
         self.height = 0
@@ -82,10 +94,16 @@ class ArtinchipDisplay:
         self.frame_id = 0
         self.rotate = rotate % 360
         self._enable_host = enable_host
-        self._stop_requested = False
+        # Shared with whoever owns the session, so a stop requested before
+        # (or while) connecting is never lost.
+        self._stop = stop if stop is not None else threading.Event()
+
+    @property
+    def _stop_requested(self) -> bool:
+        return self._stop.is_set()
 
     def request_stop(self) -> None:
-        self._stop_requested = True
+        self._stop.set()
 
     @staticmethod
     def find() -> Optional[usb.core.Device]:
@@ -116,26 +134,30 @@ class ArtinchipDisplay:
                 ) from exc
             raise DisplayError(f"USB claim failed: {exc}") from exc
         self._dev = dev
-        self._stop_requested = False
         from .session import register_display
 
         register_display(self)
-        self.width, self.height, self.pixel_format, self.fps = self._get_params()
-        if not self._authenticate():
-            raise DisplayError("Artinchip RSA authentication failed")
-        # Firmware keeps the cold-boot splash until host display mode is enabled over HID.
-        # Skip on refresh paths (e.g. hid rotate) — host mode is already on and HID
-        # handoff is multi-second.
-        if self._enable_host:
-            from p13ctl.hid.msi_p13 import HidError, enable_host_display
+        try:
+            self.width, self.height, self.pixel_format, self.fps = self._get_params()
+            if not self._authenticate():
+                raise DisplayError("Artinchip RSA authentication failed")
+            # Firmware keeps the cold-boot splash until host display mode is enabled over HID.
+            # Skip on refresh paths (e.g. hid rotate) — host mode is already on and HID
+            # handoff is multi-second.
+            if self._enable_host:
+                from p13ctl.hid.msi_p13 import HidError, enable_host_display
 
-            try:
-                enable_host_display()
-            except HidError as exc:
-                _LOGGER.warning(
-                    "could not enable host display mode (splash may remain): %s",
-                    exc,
-                )
+                try:
+                    enable_host_display()
+                except HidError as exc:
+                    _LOGGER.warning(
+                        "could not enable host display mode (splash may remain): %s",
+                        exc,
+                    )
+        except BaseException:
+            # __exit__ never runs when __enter__ raises, so release here.
+            self.close()
+            raise
         self.frame_id = 0
         _LOGGER.info("Display connected: %dx%d @ %dfps", self.width, self.height, self.fps)
 
@@ -201,6 +223,8 @@ class ArtinchipDisplay:
         self.close()
         deadline = time.monotonic() + timeout
         while True:
+            if self._stop.is_set():
+                raise DisplayError("stop requested while reconnecting")
             try:
                 # Host mode survives the firmware reboot; re-sending the HID
                 # handoff would only risk another re-enumeration.
@@ -211,16 +235,16 @@ class ArtinchipDisplay:
                 finally:
                     self._enable_host = enable_host
                 return
-            except DisplayError:
+            except (DisplayError, usb.core.USBError):
                 if time.monotonic() >= deadline:
                     raise
-                time.sleep(0.5)
+                self._stop.wait(_RECONNECT_RETRY_S)
 
     def send_jpeg(self, jpeg_data: bytes, media_format: int = 0) -> None:
         try:
             self._send_jpeg(jpeg_data, media_format)
         except usb.core.USBError as exc:
-            if getattr(exc, "errno", None) != errno.ENODEV:
+            if getattr(exc, "errno", None) not in _RECONNECT_ERRNOS:
                 raise
             # The cold-boot extendedDisplay handoff reboots the panel's USB
             # stack: the device re-enumerates moments after connect and the
@@ -266,7 +290,7 @@ class ArtinchipDisplay:
     def show_test_pattern(self) -> None:
         w, h = self.width or 480, self.height or 480
         img = Image.new("RGB", (w, h), (20, 24, 36))
-        from PIL import ImageDraw, ImageFont
+        from PIL import ImageDraw
 
         draw = ImageDraw.Draw(img)
         draw.rectangle((10, 10, w - 10, h - 10), outline=(0, 180, 255), width=3)

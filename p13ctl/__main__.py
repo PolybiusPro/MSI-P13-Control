@@ -26,7 +26,7 @@ def cmd_list(_args: argparse.Namespace) -> int:
         print("No MSI P13 devices (33c3:0e02) found.")
         return 1
     for dev in devices:
-        print(f"MSI MPG CoreLiquid P13")
+        print("MSI MPG CoreLiquid P13")
         print(f"  USB ID:      {dev.usb_id}")
         if dev.serial:
             print(f"  Serial:      {dev.serial}")
@@ -127,10 +127,6 @@ def cmd_display_desktop(args: argparse.Namespace) -> int:
         return 1
     return 0
 
-def cmd_display_monitor(args: argparse.Namespace) -> int:
-    """Alias for the EVDI extended monitor."""
-    return cmd_display_desktop(args)
-
 def cmd_sysmon(args: argparse.Namespace) -> int:
     stream = _stream_settings(args)
     try:
@@ -190,11 +186,8 @@ def cmd_hid_host(args: argparse.Namespace) -> int:
     try:
         with P13HidController() as hid_dev:
             if args.state == "on":
-                info = hid_dev.enable_host_display()
-                print(
-                    f"Host display enabled for {info.model or info.serial or 'P13'} "
-                    f"(extended={info.extended_display})."
-                )
+                hid_dev.enable_host_display()
+                print("Host display enabled.")
             else:
                 hid_dev.set_extended_display(False)
                 hid_dev.set_realtime_display(False)
@@ -294,6 +287,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_off.set_defaults(func=cmd_display_off)
     p_dd = disp_sub.add_parser(
         "desktop",
+        aliases=["monitor"],
         help="Use the P13 as an EVDI extended monitor",
     )
     p_dd.add_argument("--fps", type=int, default=None, help="target frame rate (default: from saved config or 60)")
@@ -333,21 +327,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="capture mode: crop before scaling",
     )
     p_dd.set_defaults(func=cmd_display_desktop)
-    p_dm = disp_sub.add_parser(
-        "monitor",
-        help="Alias for the EVDI extended monitor",
-    )
-    p_dm.add_argument("--fps", type=int, default=None)
-    p_dm.add_argument("--quality", type=int, default=None)
-    p_dm.add_argument("--rotate", type=int, default=None, choices=[0, 90, 180, 270])
-    p_dm.add_argument("--no-configure", action="store_true")
-    p_dm.add_argument("--no-save-layout", action="store_true")
-    p_dm.add_argument("--reset-layout", action="store_true")
-    p_dm.add_argument("--interval", type=float, default=None)
-    p_dm.add_argument("--capture", action="store_true")
-    p_dm.add_argument("--monitor", type=int, default=0)
-    p_dm.add_argument("--crop", choices=["center", "stretch"], default="center")
-    p_dm.set_defaults(func=cmd_display_monitor)
 
     p_sm = sub.add_parser("sysmon", help="Live hardware monitor")
     p_sm.add_argument("--style", type=int, default=1, choices=range(1, 6))

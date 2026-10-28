@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from pathlib import Path
 
 from PIL import Image
@@ -194,8 +195,7 @@ class MainWindow(QMainWindow):
         bg_menu.addSeparator()
         for name, sample in TEST_BACKGROUNDS.items():
             bg_menu.addAction(
-                f"Test: {name}",
-                lambda _checked=False, p=str(sample): self._set_face_background(p),
+                f"Test: {name}", self._background_setter(str(sample))
             )
         self._bg_btn.setMenu(bg_menu)
         bg_row.addWidget(self._bg_btn)
@@ -637,6 +637,12 @@ class MainWindow(QMainWindow):
         self._bg_btn.setText(f"Background: {Path(path).name}" if path else "Background…")
         self._bg_clear_btn.setVisible(bool(path))
 
+    def _background_setter(self, path: str) -> Callable[[], None]:
+        def _set() -> None:
+            self._set_face_background(path)
+
+        return _set
+
     def _choose_face_background(self) -> None:
         start_dir = QStandardPaths.writableLocation(
             QStandardPaths.StandardLocation.MoviesLocation
@@ -791,9 +797,10 @@ class MainWindow(QMainWindow):
                 self._login_notified = True
                 self._login_failed()
                 return
+            # A failed start is not a request to stay off: the saved mode is
+            # the user's choice and stays for the next launch.
             self._blank_display()
             self._active_mode = MODE_OFF
-            self._persist_mode(MODE_OFF)
             self._set_combo_mode(MODE_OFF)
             self._refresh_mode_status()
             return
@@ -869,7 +876,6 @@ class MainWindow(QMainWindow):
             self._login_failed_async("Extended monitor failed", msg)
             return
         self._active_mode = MODE_OFF
-        self._persist_mode(MODE_OFF)
         self._show_error("Extended monitor failed", msg)
         self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
@@ -1033,7 +1039,6 @@ class MainWindow(QMainWindow):
             self._login_failed_async("System monitor failed", msg)
             return
         self._active_mode = MODE_OFF
-        self._persist_mode(MODE_OFF)
         self._show_error("System monitor failed", msg)
         self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()

@@ -239,14 +239,26 @@ def test_manual_selection_cancels_login_retry(make_window, monkeypatch) -> None:
     assert window._login_mode is None
 
 
-def test_normal_launch_failure_still_persists_off(make_window, monkeypatch) -> None:
+def test_normal_launch_failure_keeps_saved_mode(make_window, monkeypatch) -> None:
     window, persisted = make_window("sysmon")
     monkeypatch.setattr(window, "_start_sysmon", lambda: False)
 
     window._maybe_apply_saved_mode()
 
-    assert "off" in persisted
+    assert "off" not in persisted
+    assert window._active_mode == "off"
     assert not window._login_timer.isActive()
+
+
+def test_worker_error_keeps_saved_mode(make_window, monkeypatch) -> None:
+    window, persisted = make_window("sysmon")
+    monkeypatch.setattr(window, "_show_error", lambda *_a: None)
+
+    window._on_sysmon_error("usb hiccup")
+    window._on_mirror_error("usb hiccup")
+
+    assert "off" not in persisted
+    assert window._active_mode == "off"
 
 
 def _login_static_window(make_window, monkeypatch):
@@ -363,6 +375,7 @@ def test_face_worker_reports_raw_usb_error(monkeypatch, qapp) -> None:
 
     monkeypatch.setattr(art, "ArtinchipDisplay", _usb_fail)
     worker = win_workers.FaceWorker(rotate=0)
+    worker.retry_delays = ()
     errors: list[str] = []
     stops: list[int] = []
     worker.error.connect(errors.append)

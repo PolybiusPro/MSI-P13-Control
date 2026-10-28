@@ -41,6 +41,34 @@ def _no_panel(*args, **kwargs):
     raise DisplayError("no panel in tests")
 
 
+class _FakeUsbDevice:
+    def is_kernel_driver_active(self, _interface) -> bool:
+        return False
+
+    def detach_kernel_driver(self, _interface) -> None:
+        pass
+
+
+@pytest.fixture
+def fake_panel(monkeypatch):
+    """Let ArtinchipDisplay.connect() succeed without touching USB or HID."""
+    import usb.util
+
+    import p13ctl.hid.msi_p13 as hid
+    from p13ctl.display.artinchip import ArtinchipDisplay
+
+    monkeypatch.setattr(
+        ArtinchipDisplay, "find", staticmethod(lambda: _FakeUsbDevice())
+    )
+    monkeypatch.setattr(usb.util, "claim_interface", lambda _dev, _iface: None)
+    monkeypatch.setattr(usb.util, "release_interface", lambda _dev, _iface: None)
+    monkeypatch.setattr(
+        ArtinchipDisplay, "_get_params", lambda self: (480, 480, 0, 60)
+    )
+    monkeypatch.setattr(ArtinchipDisplay, "_authenticate", lambda self: True)
+    monkeypatch.setattr(hid, "enable_host_display", lambda: None)
+
+
 @pytest.fixture
 def make_window(monkeypatch, qapp):
     persisted: list[str] = []
