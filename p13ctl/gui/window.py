@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 from PIL import Image
@@ -60,6 +61,7 @@ from p13ctl.display.mode import (
 from p13ctl.display.session import stop_active_sessions, wait_for_display_usb
 from p13ctl.hid.msi_p13 import P13HidController
 
+from .panel_state import Effect, Event, PanelState, step
 from .workers import FaceWorker, MirrorWorker, TaskWorker
 
 _LOGGER = logging.getLogger(__name__)
@@ -92,8 +94,7 @@ class MainWindow(QMainWindow):
         self._image_path: str | None = None
         self._active_mode: str | None = MODE_OFF
         self._autostart = autostart
-        self._login_mode: str | None = None
-        self._login_notified = False
+        self._panel = PanelState()
         self._login_quiet = False
         self._login_action_worker: TaskWorker | None = None
 
@@ -123,6 +124,28 @@ class MainWindow(QMainWindow):
 
         self._poll_timer = self.startTimer(2000)
         QTimer.singleShot(0, self._maybe_apply_saved_mode)
+
+    @property
+    def _login_mode(self) -> str | None:
+        """The mode being applied by login autostart, or None outside a login episode."""
+        return self._panel.desired if self._panel.login else None
+
+    @_login_mode.setter
+    def _login_mode(self, mode: str | None) -> None:
+        desired = self._panel.desired if mode is None else mode
+        self._panel = replace(self._panel, login=mode is not None, desired=desired)
+
+    @property
+    def _login_notified(self) -> bool:
+        return self._panel.notified
+
+    @_login_notified.setter
+    def _login_notified(self, value: bool) -> None:
+        self._panel = replace(self._panel, notified=value)
+
+    def _transition(self, event: Event, **kwargs) -> tuple[Effect, ...]:
+        self._panel, effects = step(self._panel, event, **kwargs)
+        return effects
 
     def timerEvent(self, event) -> None:  # noqa: N802
         if event.timerId() == self._poll_timer and not self._closing:
@@ -745,12 +768,20 @@ class MainWindow(QMainWindow):
         self._login_timer.start()
         self._refresh_mode_status()
 
-    def _login_failed_async(self, title: str, msg: str) -> None:
-        """Async failure while logging in: notify once per streak, then retry."""
-        if not self._login_notified:
-            self._login_notified = True
-            self._show_error(title, msg)
-        self._login_failed()
+    def _fail_async(self, title: str, msg: str) -> None:
+        """A running worker reported an error: retry at login, otherwise go Off.
+
+        The saved mode is never touched; only the live state and selector change.
+        """
+        self._active_mode = MODE_OFF
+        for effect in self._transition(Event.ASYNC_ERROR):
+            if effect is Effect.SHOW_ERROR:
+                self._show_error(title, msg)
+            elif effect is Effect.SCHEDULE_RETRY:
+                self._login_failed()
+            elif effect is Effect.SHOW_OFF:
+                self._set_combo_mode(MODE_OFF)
+                self._refresh_mode_status()
 
     def _retry_login_mode(self) -> None:
         if self._closing or self._login_mode is None:
@@ -760,11 +791,11 @@ class MainWindow(QMainWindow):
     def _apply_mode(self, mode: str, *, login: bool = False) -> None:
         if self._closing:
             return
-        if login:
-            self._login_mode = mode
-            self._login_quiet = self._login_notified
-        else:
+        effects = self._transition(Event.REQUEST, mode=mode, login=login)
+        if Effect.CANCEL_RETRY in effects:
             self._cancel_login_retry()
+        else:
+            self._login_quiet = self._login_notified
         try:
             self._apply_mode_body(mode, login=login)
         finally:
@@ -793,17 +824,19 @@ class MainWindow(QMainWindow):
         elif mode == MODE_CLOCK:
             ok = self._start_clock()
         if not ok:
-            if self._login_mode is not None:
-                self._login_notified = True
-                self._login_failed()
-                return
             # A failed start is not a request to stay off: the saved mode is
             # the user's choice and stays for the next launch.
-            self._blank_display()
-            self._active_mode = MODE_OFF
-            self._set_combo_mode(MODE_OFF)
-            self._refresh_mode_status()
+            for effect in self._transition(Event.START_FAILED):
+                if effect is Effect.SCHEDULE_RETRY:
+                    self._login_failed()
+                elif effect is Effect.BLANK:
+                    self._blank_display()
+                elif effect is Effect.SHOW_OFF:
+                    self._active_mode = MODE_OFF
+                    self._set_combo_mode(MODE_OFF)
+                    self._refresh_mode_status()
             return
+        self._transition(Event.START_OK)
         self._active_mode = mode
         if login:
             self._login_action_worker = (
@@ -872,19 +905,14 @@ class MainWindow(QMainWindow):
         self._mirror_worker = None
 
     def _on_mirror_error(self, msg: str) -> None:
-        if self._login_mode is not None:
-            self._login_failed_async("Extended monitor failed", msg)
-            return
-        self._active_mode = MODE_OFF
-        self._show_error("Extended monitor failed", msg)
-        self._set_combo_mode(MODE_OFF)
-        self._refresh_mode_status()
+        self._fail_async("Extended monitor failed", msg)
 
     def _on_mirror_stopped(self) -> None:
         self._mirror_worker = None
         if self._active_mode == MODE_EXTENDED and not self._mirror_running():
             # External stop — reflect Off without fighting a user change mid-flight.
             if self._selected_mode() == MODE_EXTENDED:
+                self._transition(Event.EXTERNAL_STOP)
                 self._active_mode = MODE_OFF
                 self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
@@ -1035,19 +1063,14 @@ class MainWindow(QMainWindow):
     def _on_sysmon_error(self, msg: str) -> None:
         if self._stale_face_signal():
             return
-        if self._login_mode is not None:
-            self._login_failed_async("System monitor failed", msg)
-            return
-        self._active_mode = MODE_OFF
-        self._show_error("System monitor failed", msg)
-        self._set_combo_mode(MODE_OFF)
-        self._refresh_mode_status()
+        self._fail_async("System monitor failed", msg)
 
     def _on_sysmon_stopped(self) -> None:
         if self._stale_face_signal():
             return
         self._sysmon_worker = None
         if self._active_mode in (MODE_SYSMON, MODE_CLOCK) and self._selected_mode() == self._active_mode:
+            self._transition(Event.EXTERNAL_STOP)
             self._active_mode = MODE_OFF
             self._set_combo_mode(MODE_OFF)
         self._refresh_mode_status()
@@ -1096,7 +1119,7 @@ class MainWindow(QMainWindow):
     def _on_action_err(self, msg: str) -> None:
         worker = self._login_action_worker
         if self._login_mode is not None and worker is not None and self.sender() is worker:
-            self._login_failed_async("Action failed", msg)
+            self._fail_async("Action failed", msg)
             return
         self._show_error("Action failed", msg)
         self._refresh_mode_status()
@@ -1119,6 +1142,7 @@ class MainWindow(QMainWindow):
         if self._closing:
             return
         self._closing = True
+        self._transition(Event.SHUTDOWN)
         try:
             self.killTimer(self._poll_timer)
         except Exception:  # noqa: BLE001

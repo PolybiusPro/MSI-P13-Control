@@ -191,6 +191,21 @@ def test_login_failure_notifies_once_across_retries(make_window, monkeypatch) ->
     assert "off" not in persisted
 
 
+def test_login_error_after_recovery_notifies_again(make_window, monkeypatch) -> None:
+    window, _ = make_window("sysmon", autostart=True)
+    outcomes = iter([False, True])
+    monkeypatch.setattr(window, "_start_sysmon", lambda: next(outcomes))
+    got: list[tuple[str, str]] = []
+    window.notify.connect(lambda t, m: got.append((t, m)))
+    window._maybe_apply_saved_mode()
+    window._login_timer.timeout.emit()
+    assert window._active_mode == "sysmon"
+
+    window._on_sysmon_error("panel unplugged")
+
+    assert got == [("System monitor failed", "panel unplugged")]
+
+
 def test_show_error_not_swallowed_after_login_streak(make_window, monkeypatch) -> None:
     window, _ = make_window("sysmon", autostart=True)
 

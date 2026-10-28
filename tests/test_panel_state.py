@@ -31,10 +31,24 @@ def test_login_request_keeps_login_and_notified_flags() -> None:
     assert Effect.CANCEL_RETRY not in effects
 
 
-def test_requesting_off_blanks_and_persists_off() -> None:
+def test_requesting_off_cancels_retry_blanks_and_persists_off() -> None:
     after, effects = step(_running(), Event.REQUEST, mode="off")
     assert after == PanelState(Phase.OFF, desired="off")
-    assert effects == (Effect.BLANK, Effect.PERSIST_OFF)
+    assert effects == (Effect.CANCEL_RETRY, Effect.BLANK, Effect.PERSIST_OFF)
+
+
+def test_requesting_off_from_a_login_retry_drops_the_login_episode() -> None:
+    before = PanelState(Phase.RETRYING, desired="clock", login=True, notified=True)
+    after, effects = step(before, Event.REQUEST, mode="off")
+    assert after == PanelState(Phase.OFF, desired="off")
+    assert effects[0] is Effect.CANCEL_RETRY
+
+
+def test_async_error_is_never_swallowed_outside_stopping() -> None:
+    for phase in (Phase.OFF, Phase.STARTING, Phase.RUNNING):
+        after, effects = step(PanelState(phase, desired="sysmon"), Event.ASYNC_ERROR)
+        assert after.phase is Phase.OFF
+        assert effects == (Effect.SHOW_ERROR, Effect.SHOW_OFF)
 
 
 def test_start_ok_runs_and_persists_the_mode() -> None:

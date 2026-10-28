@@ -88,8 +88,7 @@ def step(
         return replace(state, phase=Phase.OFF), (Effect.BLANK, Effect.SHOW_OFF)
 
     if event is Event.ASYNC_ERROR:
-        if state.phase not in (Phase.STARTING, Phase.RUNNING):
-            return state, ()
+        # Never swallowed: a worker can report after the phase already moved on.
         if state.login:
             effects = (
                 (Effect.SCHEDULE_RETRY,)
@@ -114,10 +113,10 @@ def step(
 
 def _request(state: PanelState, mode: str, login: bool) -> Result:
     if mode == MODE_OFF:
-        return (
-            PanelState(Phase.OFF, desired=MODE_OFF),
-            (Effect.BLANK, Effect.PERSIST_OFF),
-        )
+        effects: tuple[Effect, ...] = (Effect.BLANK, Effect.PERSIST_OFF)
+        if not login:
+            effects = (Effect.CANCEL_RETRY, *effects)
+        return PanelState(Phase.OFF, desired=MODE_OFF), effects
     if login:
         starting = PanelState(
             Phase.STARTING, desired=mode, login=True, notified=state.notified
