@@ -2,40 +2,20 @@
 
 from __future__ import annotations
 
-import configparser
 import json
 import logging
-import os
 import re
 import shutil
 import subprocess
-import tempfile
-import threading
 from pathlib import Path
 from typing import Any
 
+from . import config as config_file
 from .artinchip import DisplayError
 from .edid import generate_edid
 
 _LOGGER = logging.getLogger(__name__)
 
-CONFIG_VERSION = 3
-LAYOUT_VERSION = CONFIG_VERSION  # backward compat alias
-
-
-def _config_dir() -> Path:
-    """Return the p13ctl config directory, honoring XDG_CONFIG_HOME."""
-    base = os.environ.get("XDG_CONFIG_HOME")
-    root = Path(base) if base else Path.home() / ".config"
-    return root / "p13ctl"
-
-
-LAYOUT_PATH = _config_dir() / "display.ini"
-LEGACY_JSON_PATH = _config_dir() / "display-layout.json"
-# Serializes read-modify-write cycles on the config file within this process.
-_CONFIG_LOCK = threading.RLock()
-_KNOWN_SECTIONS = frozenset({"version", "virtual", "panel", "stream", "mode"})
-_GENERAL_SECTION = "general"
 DRM_SYSFS = Path("/sys/class/drm")
 _EVDI_PREFIXES = ("DVI-I", "DVI-D", "DVI")
 _CONNECTOR_DIR = re.compile(r"^card\d+-(.+)$")
@@ -61,94 +41,6 @@ _DEGREE_TO_KSCREEN: dict[int, str] = {
     180: "inverted",
     270: "left",
 }
-
-def layout_path() -> Path:
-    return LAYOUT_PATH
-
-def _encode_value(value: Any) -> str:
-    """Encode one config value for an INI line.
-
-    Everything is JSON except plain strings that JSON cannot parse (paths,
-    "0,0"), which stay raw so the file is readable. A string that JSON would
-    parse as something else ("123", "true") is JSON-quoted to keep its type.
-    """
-    if isinstance(value, str) and value == value.strip() and value.isprintable():
-        try:
-            json.loads(value)
-        except json.JSONDecodeError:
-            return value
-    return json.dumps(value, ensure_ascii=False)
-
-def _decode_value(raw: str) -> Any:
-    try:
-        return json.loads(raw)
-    except json.JSONDecodeError:
-        return raw
-
-def _new_parser() -> configparser.ConfigParser:
-    parser = configparser.ConfigParser(interpolation=None, delimiters=("=",))
-    parser.optionxform = str  # type: ignore[assignment,method-assign]
-    return parser
-
-def _read_config_file() -> dict[str, Any] | None:
-    """Return the raw config dict from display.ini, else the legacy JSON, else None."""
-    if LAYOUT_PATH.is_file():
-        try:
-            parser = _new_parser()
-            parser.read_string(LAYOUT_PATH.read_text(encoding="utf-8"))
-        except (configparser.Error, OSError, UnicodeDecodeError) as exc:
-            _LOGGER.warning("ignoring invalid saved config: %s", exc)
-            return None
-        data: dict[str, Any] = {}
-        if parser.has_section(_GENERAL_SECTION):
-            for key, raw in parser.items(_GENERAL_SECTION):
-                data[key] = _decode_value(raw)
-        for section in parser.sections():
-            if section != _GENERAL_SECTION:
-                data[section] = {k: _decode_value(v) for k, v in parser.items(section)}
-        return data
-
-    if LEGACY_JSON_PATH.is_file():
-        try:
-            legacy = json.loads(LEGACY_JSON_PATH.read_text(encoding="utf-8"))
-        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-            _LOGGER.warning("ignoring invalid saved config: %s", exc)
-            return None
-        return legacy if isinstance(legacy, dict) else None
-    return None
-
-def _write_config_file(data: dict[str, Any]) -> None:
-    """Atomically write the config dict to display.ini."""
-    parser = _new_parser()
-    parser.add_section(_GENERAL_SECTION)
-    parser.set(_GENERAL_SECTION, "version", _encode_value(data.get("version", CONFIG_VERSION)))
-    for name, section in data.items():
-        if name == "version" or not isinstance(section, dict):
-            continue
-        parser.add_section(name)
-        for key, value in section.items():
-            parser.set(name, key, _encode_value(value))
-
-    LAYOUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(
-        dir=LAYOUT_PATH.parent, prefix=f".{LAYOUT_PATH.name}.", suffix=".tmp"
-    )
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as handle:
-            parser.write(handle)
-        os.replace(tmp_name, LAYOUT_PATH)
-    except BaseException:
-        Path(tmp_name).unlink(missing_ok=True)
-        raise
-
-def _unknown_sections() -> dict[str, Any]:
-    """Sections written by other versions, to carry through a rewrite."""
-    raw = _read_config_file() or {}
-    return {
-        name: section
-        for name, section in raw.items()
-        if name not in _KNOWN_SECTIONS and isinstance(section, dict)
-    }
 
 def _evdi_connectors() -> set[str]:
     """Connector names that sysfs shows to be EVDI virtual outputs.
@@ -204,19 +96,19 @@ def find_connected_virtual_output() -> str | None:
 
 def reset_saved_layout() -> None:
     """Clear saved virtual-output placement; keep stream/panel/mode prefs."""
-    with _CONFIG_LOCK:
+    with config_file.CONFIG_LOCK:
         existing = load_display_config() or {}
-        keep: dict[str, Any] = {"version": CONFIG_VERSION}
+        keep: dict[str, Any] = {"version": config_file.CONFIG_VERSION}
         for key in ("panel", "stream", "mode"):
             if existing.get(key):
                 keep[key] = existing[key]
-        keep.update(_unknown_sections())
+        keep.update(config_file.unknown_sections())
         try:
             if keep.keys() - {"version"}:
-                _write_config_file(keep)
+                config_file.write_config_file(keep)
             else:
-                LAYOUT_PATH.unlink(missing_ok=True)
-            LEGACY_JSON_PATH.unlink(missing_ok=True)
+                config_file.LAYOUT_PATH.unlink(missing_ok=True)
+            config_file.LEGACY_JSON_PATH.unlink(missing_ok=True)
         except OSError as exc:
             raise DisplayError(f"could not remove saved config: {exc}") from exc
 
@@ -329,15 +221,15 @@ def apply_content_rotation(degrees: int) -> str:
     return "; ".join(notes)
 
 def _patch_virtual_rotation(output: str, rotation: str | None) -> None:
-    with _CONFIG_LOCK:
-        data = load_display_config() or {"version": CONFIG_VERSION}
+    with config_file.CONFIG_LOCK:
+        data = load_display_config() or {"version": config_file.CONFIG_VERSION}
         virtual = dict(data.get("virtual") or {})
         virtual["name"] = output
         virtual["rotation"] = rotation
         data["virtual"] = virtual
-        data["version"] = CONFIG_VERSION
-        data.update(_unknown_sections())
-        _write_config_file(data)
+        data["version"] = config_file.CONFIG_VERSION
+        data.update(config_file.unknown_sections())
+        config_file.write_config_file(data)
 
 def _apply_kscreen_rotation(output: str, rotation: str) -> bool:
     doctor = shutil.which("kscreen-doctor")
@@ -588,14 +480,14 @@ def capture_virtual_output(name: str | None = None) -> dict[str, Any]:
         "anchor": anchor,
         "offset": offset,
     }
-    return {"version": CONFIG_VERSION, "virtual": virtual}
+    return {"version": config_file.CONFIG_VERSION, "virtual": virtual}
 
 def load_display_config() -> dict[str, Any] | None:
-    data = _read_config_file()
+    data = config_file.read_config_file()
     if data is None:
         return None
 
-    config: dict[str, Any] = {"version": CONFIG_VERSION}
+    config: dict[str, Any] = {"version": config_file.CONFIG_VERSION}
     virtual = _load_virtual_entry(data)
     if virtual is not None:
         config["virtual"] = virtual
@@ -617,9 +509,9 @@ def save_display_config(
     mode: dict[str, Any] | None = None,
 ) -> Path:
     """Save P13 settings, merging with any existing config on disk."""
-    with _CONFIG_LOCK:
+    with config_file.CONFIG_LOCK:
         existing = load_display_config() or {}
-        data: dict[str, Any] = {"version": CONFIG_VERSION}
+        data: dict[str, Any] = {"version": config_file.CONFIG_VERSION}
 
         if virtual_output is not None:
             try:
@@ -647,17 +539,17 @@ def save_display_config(
         elif existing.get("mode"):
             data["mode"] = existing["mode"]
 
-        data.update(_unknown_sections())
-        _write_config_file(data)
-        _LOGGER.info("saved display config to %s", LAYOUT_PATH)
-        return LAYOUT_PATH
+        data.update(config_file.unknown_sections())
+        config_file.write_config_file(data)
+        _LOGGER.info("saved display config to %s", config_file.LAYOUT_PATH)
+        return config_file.LAYOUT_PATH
 
 def save_layout(virtual_output: str | None = None) -> Path:
     """Save only the virtual monitor section (merges with existing config)."""
     return save_display_config(virtual_output=virtual_output)
 
 def _load_virtual_entry(data: dict[str, Any]) -> dict[str, Any] | None:
-    if data.get("version") in (CONFIG_VERSION, 2) and data.get("virtual"):
+    if data.get("version") in (config_file.CONFIG_VERSION, 2) and data.get("virtual"):
         return dict(data["virtual"])
     if data.get("version") == 1:
         for entry in data.get("outputs", []):
@@ -671,7 +563,7 @@ def load_layout() -> dict[str, Any] | None:
     config = load_display_config()
     if config is None or not config.get("virtual"):
         return None
-    return {"version": CONFIG_VERSION, "virtual": config["virtual"]}
+    return {"version": config_file.CONFIG_VERSION, "virtual": config["virtual"]}
 
 def _kscreen_args_for_virtual(entry: dict[str, Any], position: str | None) -> list[str]:
     name = entry["name"]

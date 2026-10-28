@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from p13ctl.display import layout
+from p13ctl.display import config, layout
 
 FULL_CONFIG = {
     "version": 3,
@@ -38,13 +38,13 @@ FULL_CONFIG = {
 def paths(tmp_path: Path, monkeypatch) -> tuple[Path, Path]:
     ini = tmp_path / "p13ctl" / "display.ini"
     legacy = tmp_path / "p13ctl" / "display-layout.json"
-    monkeypatch.setattr(layout, "LAYOUT_PATH", ini)
-    monkeypatch.setattr(layout, "LEGACY_JSON_PATH", legacy)
+    monkeypatch.setattr(config, "LAYOUT_PATH", ini)
+    monkeypatch.setattr(config, "LEGACY_JSON_PATH", legacy)
     return ini, legacy
 
 
 def _save_full() -> None:
-    layout._write_config_file(FULL_CONFIG)
+    config.write_config_file(FULL_CONFIG)
 
 
 def test_full_config_round_trips(paths) -> None:
@@ -211,7 +211,7 @@ def test_reset_from_legacy_only_migrates_and_deletes_legacy(paths) -> None:
 
 def test_reset_removes_everything_when_nothing_else_remains(paths) -> None:
     ini, legacy = paths
-    layout._write_config_file({"version": 3, "virtual": FULL_CONFIG["virtual"]})
+    config.write_config_file({"version": 3, "virtual": FULL_CONFIG["virtual"]})
     legacy.write_text(json.dumps(FULL_CONFIG["virtual"]), encoding="utf-8")
 
     layout.reset_saved_layout()
@@ -265,7 +265,7 @@ def test_failed_write_keeps_previous_file(paths, monkeypatch) -> None:
     def boom(*args, **kwargs):
         raise OSError("disk full")
 
-    monkeypatch.setattr(layout.os, "replace", boom)
+    monkeypatch.setattr(config.os, "replace", boom)
     with pytest.raises(OSError):
         layout.save_display_config(panel={"brightness": 7})
 
@@ -275,7 +275,7 @@ def test_failed_write_keeps_previous_file(paths, monkeypatch) -> None:
 
 def test_config_dir_honors_xdg_config_home(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
-    assert layout._config_dir() == tmp_path / "p13ctl"
+    assert config.config_dir() == tmp_path / "p13ctl"
 
 
 @pytest.mark.parametrize("value", [None, ""])
@@ -285,17 +285,17 @@ def test_config_dir_falls_back_to_dot_config(monkeypatch, tmp_path: Path, value)
         monkeypatch.delenv("XDG_CONFIG_HOME", raising=False)
     else:
         monkeypatch.setenv("XDG_CONFIG_HOME", value)
-    assert layout._config_dir() == tmp_path / ".config" / "p13ctl"
+    assert config.config_dir() == tmp_path / ".config" / "p13ctl"
 
 
 def test_concurrent_saves_do_not_lose_sections(paths, monkeypatch) -> None:
-    real_write = layout._write_config_file
+    real_write = config.write_config_file
 
     def slow_write(data) -> None:
         time.sleep(0.05)
         real_write(data)
 
-    monkeypatch.setattr(layout, "_write_config_file", slow_write)
+    monkeypatch.setattr(config, "write_config_file", slow_write)
     threads = [
         threading.Thread(target=layout.save_display_config, kwargs={"stream": {"fps": 30}}),
         threading.Thread(target=layout.save_display_config, kwargs={"mode": {"name": "off"}}),
@@ -305,31 +305,31 @@ def test_concurrent_saves_do_not_lose_sections(paths, monkeypatch) -> None:
     for thread in threads:
         thread.join()
 
-    config = layout.load_display_config()
-    assert config is not None
-    assert config["stream"] == {"fps": 30}
-    assert config["mode"] == {"name": "off"}
+    saved = layout.load_display_config()
+    assert saved is not None
+    assert saved["stream"] == {"fps": 30}
+    assert saved["mode"] == {"name": "off"}
 
 
 def test_save_preserves_sections_it_does_not_know(paths) -> None:
-    layout._write_config_file({"version": 3, "future": {"flag": True}, "mode": {"name": "off"}})
+    config.write_config_file({"version": 3, "future": {"flag": True}, "mode": {"name": "off"}})
 
     layout.save_display_config(stream={"fps": 30})
 
-    raw = layout._read_config_file()
+    raw = config.read_config_file()
     assert raw is not None
     assert raw["future"] == {"flag": True}
     assert raw["stream"] == {"fps": 30}
 
 
 def test_reset_saved_layout_preserves_unknown_sections(paths) -> None:
-    layout._write_config_file(
+    config.write_config_file(
         {"version": 3, "future": {"flag": True}, "virtual": {"name": "DVI-I-1"}, "mode": {"name": "off"}}
     )
 
     layout.reset_saved_layout()
 
-    raw = layout._read_config_file()
+    raw = config.read_config_file()
     assert raw is not None
     assert raw["future"] == {"flag": True}
     assert "virtual" not in raw

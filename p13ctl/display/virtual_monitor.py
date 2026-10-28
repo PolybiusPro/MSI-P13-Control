@@ -12,9 +12,9 @@ import threading
 import time
 
 from .artinchip import DisplayError
+from . import config as config_file
 from .evdi_bridge import EvdiBridge, PANEL_HEIGHT, PANEL_WIDTH
 from .layout import (
-    LAYOUT_PATH,
     aligned_virtual_position,
     apply_layout,
     apply_panel_config,
@@ -308,7 +308,7 @@ def run_virtual_monitor(
                     virtual_output=output_name,
                     stream={"fps": fps, "quality": quality, "rotate": rotate},
                 )
-                print(f"Saved P13 settings to {LAYOUT_PATH}")
+                print(f"Saved P13 settings to {config_file.LAYOUT_PATH}")
             except DisplayError as exc:
                 _LOGGER.warning("could not save display config: %s", exc)
         unregister_bridge(bridge)
