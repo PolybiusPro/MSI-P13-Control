@@ -1,4 +1,4 @@
-"""send_jpeg recovers when the panel re-enumerates after the host handoff."""
+"""ArtinchipDisplay: reconnect after re-enumeration, connect failures, RSA auth."""
 
 from __future__ import annotations
 
@@ -7,9 +7,15 @@ import errno
 import pytest
 import usb.core
 import usb.util
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from p13ctl.display import artinchip
-from p13ctl.display.artinchip import DISPLAY_INTERFACE, ArtinchipDisplay, DisplayError
+from p13ctl.display.artinchip import (
+    DISPLAY_INTERFACE,
+    ArtinchipDisplay,
+    DisplayError,
+    _rsa_public_decrypt,
+)
 
 
 def _display(first_error: int | None):
@@ -116,3 +122,33 @@ def test_reconnect_gives_up_when_stop_requested() -> None:
     display.connect = lambda: pytest.fail("reconnected after stop")  # type: ignore[method-assign]
     with pytest.raises(DisplayError):
         display._reconnect()
+
+
+def _sign_raw(key: rsa.RSAPrivateKey, padded: bytes) -> bytes:
+    numbers = key.private_numbers()
+    n = numbers.public_numbers.n
+    signed = pow(int.from_bytes(padded, "big"), numbers.d, n)
+    return signed.to_bytes((n.bit_length() + 7) // 8, "big")
+
+
+@pytest.fixture(scope="module")
+def key() -> rsa.RSAPrivateKey:
+    return rsa.generate_private_key(public_exponent=65537, key_size=2048)
+
+
+def test_rsa_public_decrypt_recovers_payload(key) -> None:
+    payload = b"challenge-bytes"
+    padded = b"\x00\x01" + b"\xff" * (256 - 3 - len(payload)) + b"\x00" + payload
+    assert _rsa_public_decrypt(key.public_key(), _sign_raw(key, padded)) == payload
+
+
+@pytest.mark.parametrize(
+    ("prefix", "message"),
+    [(b"\x00\x02", "padding invalid"), (b"\x00\x01", "separator invalid")],
+)
+def test_rsa_public_decrypt_rejects_bad_padding(key, prefix: bytes, message: str) -> None:
+    # Type-2 padding, or type-1 with no 0x00 separator after the 0xFF run.
+    fill = b"\xaa" if prefix == b"\x00\x02" else b"\xff"
+    padded = prefix + fill * (256 - len(prefix))
+    with pytest.raises(DisplayError, match=message):
+        _rsa_public_decrypt(key.public_key(), _sign_raw(key, padded))

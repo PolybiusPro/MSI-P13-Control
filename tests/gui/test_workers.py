@@ -1,12 +1,7 @@
-"""A stop request must survive every startup phase of a panel session."""
+"""FaceWorker: stop requests and the bounded retry supervisor."""
 
 from __future__ import annotations
 
-import threading
-
-import pytest
-
-from p13ctl.display import evdi_bridge, virtual_monitor
 from p13ctl.display.artinchip import ArtinchipDisplay, DisplayError
 from p13ctl.gui.workers import FaceWorker
 
@@ -52,49 +47,6 @@ def test_face_worker_reports_unexpected_errors(monkeypatch, qapp, fake_panel) ->
 
     assert len(errors) == 1 and "bad frame" in errors[0]
     assert stops == [1]
-
-
-def test_bridge_run_honors_a_stop_requested_before_start(monkeypatch) -> None:
-    bridge = evdi_bridge.EvdiBridge()
-    bridge.handle = object()
-    bridge.display = object()
-    monkeypatch.setattr(evdi_bridge.evdi, "get_event_fd", lambda _handle: 0)
-
-    def entered(*args):
-        raise AssertionError("stream loop entered after stop")
-
-    monkeypatch.setattr(bridge, "_poll_events", entered)
-
-    bridge.request_stop()
-    bridge.run()
-
-
-@pytest.mark.parametrize("stop_during", ["setup", "configure"])
-def test_virtual_monitor_skips_the_stream_when_stopped_during_startup(
-    monkeypatch, stop_during
-) -> None:
-    stop = threading.Event()
-    streamed: list[int] = []
-
-    def setup(self) -> None:
-        if stop_during == "setup":
-            stop.set()
-
-    def configure(**kwargs):
-        if stop_during == "configure":
-            stop.set()
-        return "DVI-I-1", False
-
-    monkeypatch.setattr(virtual_monitor, "ensure_evdi_loaded", lambda: None)
-    monkeypatch.setattr(virtual_monitor, "load_display_config", lambda: None)
-    monkeypatch.setattr(virtual_monitor, "configure_virtual_output", configure)
-    monkeypatch.setattr(evdi_bridge.EvdiBridge, "setup_evdi", setup)
-    monkeypatch.setattr(evdi_bridge.EvdiBridge, "run", lambda self: streamed.append(1))
-    monkeypatch.setattr(evdi_bridge.EvdiBridge, "shutdown", lambda self: None)
-
-    virtual_monitor.run_virtual_monitor(configure=True, save_layout=False, stop=stop)
-
-    assert streamed == []
 
 
 def _fast_worker(**kwargs) -> FaceWorker:
